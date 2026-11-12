@@ -1,0 +1,77 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Dark ("Arcade Night") - Default */
+  --bg: #1E1B3A;
+  --surface: #2A2650;
+  --surface-raised: #383270;
+  --line: #4C4690;
+  --text: #F7F4FF;
+  --text-muted: #B9B3DE;
+  --primary: #FF5FA2;
+  --success: #3DDBB0;
+  --danger: #FF5C6C;
+  --warn: #FFD23F;
+}
+
+html.light {
+  /* Light ("Daylight") */
+  --bg: #F4F2FF;
+  --surface: #FFFFFF;
+  --surface-raised: #FFFFFF;
+  --line: #D6D0F5;
+  --text: #231F4A;
+  --text-muted: #5F5A8F;
+  --primary: #E0357F;
+  --success: #0E9F7A;
+  --danger: #D63348;
+  --warn: #B87F00;
+}
+
+/* Base adjustments */
+body {
+  font-family: 'Figtree', system-ui, -apple-system, sans-serif;
+  background-color: var(--bg);
+  color: var(--text);
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Fredoka', system-ui, sans-serif;
+}
+
+/* Spotlights */
+.hero-spotlight {
+  background: radial-gradient(circle at 50% 20%, rgba(255, 95, 162, 0.15) 0%, transparent 60%);
+}
+
+.podium-spotlight {
+  background: radial-gradient(circle at 50% 50%, rgba(255, 210, 63, 0.2) 0%, transparent 70%);
+}
+
+/* Button Chunky Press Styling */
+.btn-chunky {
+  position: relative;
+  transition: all 0.1s ease-in-out;
+  box-shadow: 0 4px 0 var(--line);
+}
+
+.btn-chunky:active:not(:disabled) {
+  transform: translateY(3px);
+  box-shadow: 0 1px 0 var(--line);
+}
+
+.btn-chunky-primary {
+  box-shadow: 0 4px 0 rgba(0, 0, 0, 0.35);
+}
+
+.btn-chunky-primary:active:not(:disabled) {
+  transform: translateY(3px);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+}
