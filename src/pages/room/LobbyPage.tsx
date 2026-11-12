@@ -95,6 +95,12 @@ export const LobbyPage: React.FC = () => {
         // Broadcast received: All players navigate immediately
         navigate(`/room/${code}/play`);
       })
+      .on('broadcast', { event: 'game_selected' }, ({ payload }) => {
+        // Broadcast received: Update selected game on all devices
+        if (payload?.game) {
+          setSelectedGame(payload.game);
+        }
+      })
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'rooms' },
@@ -150,6 +156,18 @@ export const LobbyPage: React.FC = () => {
     navigator.clipboard.writeText(room.code);
     setCopiedCode(true);
     setTimeout(() => setCopiedCode(false), 2000);
+  };
+
+  const handleSelectGame = async (gameId: string) => {
+    if (!isHost && !allowVoting) return;
+    setSelectedGame(gameId);
+
+    const channel = supabase.channel(`room_lobby:${code}`);
+    await channel.send({
+      type: 'broadcast',
+      event: 'game_selected',
+      payload: { game: gameId },
+    });
   };
 
   const handleKickPlayer = async (targetUserId: string) => {
@@ -413,13 +431,13 @@ export const LobbyPage: React.FC = () => {
                   <button
                     key={g.id}
                     type="button"
-                    disabled={!isHost}
-                    onClick={() => setSelectedGame(g.id)}
+                    disabled={!isHost && !allowVoting}
+                    onClick={() => handleSelectGame(g.id)}
                     className={`p-3.5 rounded-card text-left transition-all border-2 flex flex-col justify-between min-h-[110px] ${
                       isSelected
                         ? 'border-primary bg-primary/10 shadow-md scale-[1.02]'
                         : 'border-line bg-surface-raised hover:border-text-muted/40'
-                    } ${!isHost && 'cursor-default'}`}
+                    } ${!isHost && !allowVoting && 'cursor-default'}`}
                   >
                     <div className="flex items-center justify-between">
                       <span className="text-2xl">{g.icon}</span>

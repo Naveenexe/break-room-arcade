@@ -98,6 +98,9 @@ export const TypingRace: React.FC<TypingRaceProps> = ({
           [payload.userId]: payload,
         }));
       })
+      .on('broadcast', { event: 'race_finished' }, ({ payload }) => {
+        onFinishGame(payload.finalScores);
+      })
       .subscribe();
 
     return () => {
@@ -169,11 +172,19 @@ export const TypingRace: React.FC<TypingRaceProps> = ({
     }
   }, [allProgress, players.length, accuracy]);
 
-  const handleFinish = () => {
+  const handleFinish = async () => {
     const scoresMap: { [uid: string]: number } = {};
     rankings.forEach((r) => {
       scoresMap[r.userId] = r.score;
     });
+
+    const channel = supabase.channel(`typing:${room.id}`);
+    await channel.send({
+      type: 'broadcast',
+      event: 'race_finished',
+      payload: { finalScores: scoresMap },
+    });
+
     onFinishGame(scoresMap);
   };
 

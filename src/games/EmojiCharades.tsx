@@ -64,6 +64,16 @@ export const EmojiCharades: React.FC<EmojiCharadesProps> = ({
       .on('broadcast', { event: 'clue_update' }, ({ payload }) => {
         setEmojiClue(payload.clue);
       })
+      .on('broadcast', { event: 'advance_actor' }, ({ payload }) => {
+        setActorIndex(payload.nextActorIndex);
+        setEmojiClue('');
+        setCorrectGuessers([]);
+        setHasGuessedCorrectly(false);
+        setHasSkipped(false);
+      })
+      .on('broadcast', { event: 'charades_finished' }, ({ payload }) => {
+        onFinishGame(payload.finalScores);
+      })
       .on('broadcast', { event: 'guess_message' }, ({ payload }) => {
         setChatLog((prev) => [...prev, payload]);
         if (payload.isCorrect && !correctGuessers.includes(payload.userId)) {
@@ -197,26 +207,39 @@ export const EmojiCharades: React.FC<EmojiCharadesProps> = ({
     }
   };
 
-  const endRound = () => {
+  const endRound = async () => {
     if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
 
     const guessersCount = correctGuessers.length;
     const allGuessed = guessersCount >= players.length - 1;
     const actorScore = computeDrawerScore(guessersCount, allGuessed);
 
-    setCumulativeScores((prev) => ({
-      ...prev,
-      [currentActor.user_id]: (prev[currentActor.user_id] || 0) + actorScore,
-    }));
+    const updatedScores = {
+      ...cumulativeScores,
+      [currentActor.user_id]: (cumulativeScores[currentActor.user_id] || 0) + actorScore,
+    };
+    setCumulativeScores(updatedScores);
+
+    const channel = supabase.channel(`charades:${room.id}`);
 
     if (actorIndex < players.length - 1) {
+      await channel.send({
+        type: 'broadcast',
+        event: 'advance_actor',
+        payload: { nextActorIndex: actorIndex + 1 },
+      });
       setActorIndex((idx) => idx + 1);
       setEmojiClue('');
       setCorrectGuessers([]);
       setHasGuessedCorrectly(false);
       setHasSkipped(false);
     } else {
-      onFinishGame(cumulativeScores);
+      await channel.send({
+        type: 'broadcast',
+        event: 'charades_finished',
+        payload: { finalScores: updatedScores },
+      });
+      onFinishGame(updatedScores);
     }
   };
 

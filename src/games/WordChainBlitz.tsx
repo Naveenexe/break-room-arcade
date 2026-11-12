@@ -103,6 +103,9 @@ export const WordChainBlitz: React.FC<WordChainBlitzProps> = ({
       .on('broadcast', { event: 'player_eliminated' }, ({ payload }) => {
         handleElimination(payload.userId);
       })
+      .on('broadcast', { event: 'wordchain_finished' }, ({ payload }) => {
+        onFinishGame(payload.finalScores);
+      })
       .subscribe();
 
     return () => {
@@ -139,7 +142,7 @@ export const WordChainBlitz: React.FC<WordChainBlitzProps> = ({
     }
   };
 
-  const finishGame = (winnerId: string, eliminatedList: string[]) => {
+  const finishGame = async (winnerId: string, eliminatedList: string[]) => {
     const finalScores: { [uid: string]: number } = {};
     const reversedElim = [...eliminatedList].reverse(); // 2nd, 3rd, etc.
 
@@ -150,6 +153,13 @@ export const WordChainBlitz: React.FC<WordChainBlitzProps> = ({
     reversedElim.forEach((uid, index) => {
       const placement = index + 2;
       finalScores[uid] = computeWordChainScore(wordCounts[uid] || 0, placement);
+    });
+
+    const channel = supabase.channel(`wordchain:${room.id}`);
+    await channel.send({
+      type: 'broadcast',
+      event: 'wordchain_finished',
+      payload: { finalScores },
     });
 
     onFinishGame(finalScores);

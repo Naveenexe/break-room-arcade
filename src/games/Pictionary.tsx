@@ -96,6 +96,22 @@ export const Pictionary: React.FC<PictionaryProps> = ({
       .on('broadcast', { event: 'clear_canvas' }, () => {
         setStrokes([]);
       })
+      .on('broadcast', { event: 'word_chosen' }, ({ payload }) => {
+        setSecretWord(payload.word);
+        setIsWordChosen(true);
+        roundStartRef.current = payload.startTime;
+      })
+      .on('broadcast', { event: 'advance_drawer' }, ({ payload }) => {
+        setDrawerIndex(payload.nextDrawerIndex);
+        setIsWordChosen(false);
+        setSecretWord('');
+        setStrokes([]);
+        setCorrectGuessers([]);
+        setHasGuessedCorrectly(false);
+      })
+      .on('broadcast', { event: 'pictionary_finished' }, ({ payload }) => {
+        onFinishGame(payload.finalScores);
+      })
       .on('broadcast', { event: 'guess_message' }, ({ payload }) => {
         setChatLog((prev) => [...prev, payload]);
         if (payload.isCorrect && !correctGuessers.includes(payload.userId)) {
@@ -146,10 +162,18 @@ export const Pictionary: React.FC<PictionaryProps> = ({
   }, [redrawCanvas]);
 
   // Choose secret word
-  const chooseWord = (word: string) => {
+  const chooseWord = async (word: string) => {
     setSecretWord(word);
     setIsWordChosen(true);
-    roundStartRef.current = timeSync.correctedNow();
+    const start = timeSync.correctedNow();
+    roundStartRef.current = start;
+
+    const channel = supabase.channel(`pictionary:${room.id}`);
+    await channel.send({
+      type: 'broadcast',
+      event: 'word_chosen',
+      payload: { word, startTime: start },
+    });
 
     if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     timerIntervalRef.current = window.setInterval(() => {
@@ -294,7 +318,7 @@ export const Pictionary: React.FC<PictionaryProps> = ({
     }
   };
 
-  const endRound = () => {
+  const endRound = async () => {
     if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
 
     // Compute drawer score (PIC-8)
@@ -302,19 +326,33 @@ export const Pictionary: React.FC<PictionaryProps> = ({
     const allGuessed = guessersCount >= players.length - 1;
     const drawerScore = computeDrawerScore(guessersCount, allGuessed);
 
-    setCumulativeScores((prev) => ({
-      ...prev,
-      [currentDrawer.user_id]: (prev[currentDrawer.user_id] || 0) + drawerScore,
-    }));
+    const updatedScores = {
+      ...cumulativeScores,
+      [currentDrawer.user_id]: (cumulativeScores[currentDrawer.user_id] || 0) + drawerScore,
+    };
+    setCumulativeScores(updatedScores);
+
+    const channel = supabase.channel(`pictionary:${room.id}`);
 
     if (drawerIndex < players.length - 1) {
+      await channel.send({
+        type: 'broadcast',
+        event: 'advance_drawer',
+        payload: { nextDrawerIndex: drawerIndex + 1 },
+      });
       setDrawerIndex((idx) => idx + 1);
       setIsWordChosen(false);
+      setSecretWord('');
       setStrokes([]);
       setCorrectGuessers([]);
       setHasGuessedCorrectly(false);
     } else {
-      onFinishGame(cumulativeScores);
+      await channel.send({
+        type: 'broadcast',
+        event: 'pictionary_finished',
+        payload: { finalScores: updatedScores },
+      });
+      onFinishGame(updatedScores);
     }
   };
 

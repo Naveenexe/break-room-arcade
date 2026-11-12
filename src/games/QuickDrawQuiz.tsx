@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
@@ -7,7 +7,7 @@ import { timeSync } from '@/lib/time-sync';
 import { computeQuizScore } from '@/lib/scoring';
 import { SEED_QUIZ, QuizSeedItem } from '@/data/seed-content';
 import type { Room, RoomPlayer, Profile } from '@/types/database';
-import { Lightbulb, CheckCircle2, XCircle, ArrowRight, Clock } from 'lucide-react';
+import { Lightbulb, CheckCircle2, XCircle, Clock } from 'lucide-react';
 
 interface PlayerWithProfile extends RoomPlayer {
   profile?: Profile;
@@ -34,9 +34,17 @@ export const QuickDrawQuiz: React.FC<QuickDrawQuizProps> = ({
   isHost,
   onFinishGame,
 }) => {
+  // Synchronized questions (seeded deterministically by room id so all devices have identical question sets)
   const [questions] = useState<QuizSeedItem[]>(() => {
-    // Shuffle and pick 10 questions
-    return [...SEED_QUIZ].sort(() => 0.5 - Math.random()).slice(0, 10);
+    // Deterministic shuffle based on room id
+    let hash = 0;
+    for (let i = 0; i < room.id.length; i++) hash = (hash << 5) - hash + room.id.charCodeAt(i);
+    const shuffled = [...SEED_QUIZ].sort((a, b) => {
+      const hA = (hash ^ a.question.length) % 100;
+      const hB = (hash ^ b.question.length) % 100;
+      return hA - hB;
+    });
+    return shuffled.slice(0, 10);
   });
 
   const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
@@ -52,38 +60,20 @@ export const QuickDrawQuiz: React.FC<QuickDrawQuizProps> = ({
   const timerIntervalRef = useRef<number | null>(null);
   const currentQ = questions[currentQuestionIdx];
 
-  // Reset for next question
-  const startQuestion = () => {
-    setSelectedChoice(null);
-    setLockedIn(false);
-    setIsRevealed(false);
-    setSubmissions([]);
-    setRemainingSecs(15);
-    questionStartRef.current = timeSync.correctedNow();
+  // Broadcast helper
+  const sendBroadcast = useCallback(
+    async (event: string, payload: Record<string, unknown>) => {
+      const channel = supabase.channel(`quiz:${room.id}`);
+      await channel.send({
+        type: 'broadcast',
+        event,
+        payload,
+      });
+    },
+    [room.id]
+  );
 
-    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-    timerIntervalRef.current = window.setInterval(() => {
-      const elapsed = Math.round((timeSync.correctedNow() - questionStartRef.current) / 1000);
-      const left = Math.max(0, 15 - elapsed);
-      setRemainingSecs(left);
-      if (left <= 5 && left > 0) {
-        sound.playTick();
-      }
-      if (left === 0) {
-        clearInterval(timerIntervalRef.current!);
-        revealAnswers();
-      }
-    }, 1000);
-  };
-
-  useEffect(() => {
-    startQuestion();
-    return () => {
-      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-    };
-  }, [currentQuestionIdx]);
-
-  // Realtime subscription for submissions
+  // Synchronized Realtime Event Bus
   useEffect(() => {
     const channel = supabase.channel(`quiz:${room.id}`, {
       config: { broadcast: { self: true } },
@@ -96,13 +86,59 @@ export const QuickDrawQuiz: React.FC<QuickDrawQuizProps> = ({
           return [...prev, payload];
         });
       })
+      .on('broadcast', { event: 'reveal_answers' }, ({ payload }) => {
+        setIsRevealed(true);
+        if (payload?.cumulativeScores) {
+          setCumulativeScores(payload.cumulativeScores);
+        }
+      })
+      .on('broadcast', { event: 'next_question' }, ({ payload }) => {
+        setCurrentQuestionIdx(payload.questionIdx);
+        setSelectedChoice(null);
+        setLockedIn(false);
+        setIsRevealed(false);
+        setSubmissions([]);
+        setRemainingSecs(15);
+      })
+      .on('broadcast', { event: 'quiz_finished' }, ({ payload }) => {
+        onFinishGame(payload.finalScores);
+      })
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     };
-  }, [room.id]);
+  }, [room.id, onFinishGame]);
 
+  // Synchronized Timer for Each Question
+  useEffect(() => {
+    questionStartRef.current = timeSync.correctedNow();
+    setRemainingSecs(15);
+
+    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    timerIntervalRef.current = window.setInterval(() => {
+      const elapsed = Math.round((timeSync.correctedNow() - questionStartRef.current) / 1000);
+      const left = Math.max(0, 15 - elapsed);
+      setRemainingSecs(left);
+
+      if (left <= 5 && left > 0) {
+        sound.playTick();
+      }
+      if (left === 0 && !isRevealed) {
+        clearInterval(timerIntervalRef.current!);
+        if (isHost) {
+          handleHostReveal();
+        }
+      }
+    }, 1000);
+
+    return () => {
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    };
+  }, [currentQuestionIdx]);
+
+  // Player Locks in Answer
   const handleSelectChoice = async (index: number) => {
     if (lockedIn || isRevealed) return;
 
@@ -117,46 +153,51 @@ export const QuickDrawQuiz: React.FC<QuickDrawQuizProps> = ({
       elapsedMs: elapsed,
     };
 
-    setSubmissions((prev) => [...prev, sub]);
-
-    const channel = supabase.channel(`quiz:${room.id}`);
-    await channel.send({
-      type: 'broadcast',
-      event: 'submit_quiz_answer',
-      payload: sub,
-    });
+    await sendBroadcast('submit_quiz_answer', sub as unknown as Record<string, unknown>);
   };
 
-  const revealAnswers = () => {
-    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-    setIsRevealed(true);
-
-    // Compute scores for this question
+  // Host evaluates when all answered or time expired
+  const handleHostReveal = useCallback(() => {
     const updated = { ...cumulativeScores };
+
     submissions.forEach((sub) => {
       const isCorrect = sub.choiceIndex === currentQ.answerIndex;
-      const points = computeQuizScore(isCorrect, sub.elapsedMs, 15000, sub.userId === userId ? streakCount : 0);
+      const points = computeQuizScore(isCorrect, sub.elapsedMs, 15000, 0);
       updated[sub.userId] = (updated[sub.userId] || 0) + points;
-
-      if (sub.userId === userId) {
-        if (isCorrect) {
-          setStreakCount((s) => s + 1);
-          sound.playCorrect();
-        } else {
-          setStreakCount(0);
-          sound.playWrong();
-        }
-      }
     });
 
-    setCumulativeScores(updated);
-  };
+    sendBroadcast('reveal_answers', { cumulativeScores: updated });
+  }, [cumulativeScores, submissions, currentQ, sendBroadcast]);
 
-  const nextQuestionOrFinish = () => {
+  // Check if all players answered early
+  useEffect(() => {
+    if (!isHost || isRevealed) return;
+    if (submissions.length >= players.length && players.length > 0) {
+      handleHostReveal();
+    }
+  }, [isHost, isRevealed, submissions.length, players.length, handleHostReveal]);
+
+  // Sound feedback on reveal
+  useEffect(() => {
+    if (!isRevealed) return;
+    if (selectedChoice === currentQ.answerIndex) {
+      setStreakCount((s) => s + 1);
+      sound.playCorrect();
+    } else if (selectedChoice !== null) {
+      setStreakCount(0);
+      sound.playWrong();
+    }
+  }, [isRevealed]);
+
+  // Host advances everyone to the next question or podium
+  const handleNextQuestionOrFinish = async () => {
+    if (!isHost) return;
+
     if (currentQuestionIdx >= questions.length - 1) {
+      await sendBroadcast('quiz_finished', { finalScores: cumulativeScores });
       onFinishGame(cumulativeScores);
     } else {
-      setCurrentQuestionIdx((q) => q + 1);
+      await sendBroadcast('next_question', { questionIdx: currentQuestionIdx + 1 });
     }
   };
 
@@ -198,7 +239,7 @@ export const QuickDrawQuiz: React.FC<QuickDrawQuizProps> = ({
           {currentQ.question}
         </h2>
 
-        {/* 4 Multiple Choice Options (QZ-1, QZ-2) */}
+        {/* 4 Multiple Choice Options */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {currentQ.options.map((opt, idx) => {
             const isSelected = selectedChoice === idx;
@@ -230,7 +271,7 @@ export const QuickDrawQuiz: React.FC<QuickDrawQuizProps> = ({
           })}
         </div>
 
-        {/* Submissions strip */}
+        {/* Submissions Strip */}
         <div className="flex items-center gap-2 pt-2 border-t border-line">
           <span className="text-xs text-text-muted font-semibold">Answered:</span>
           <div className="flex items-center gap-1.5">
@@ -245,7 +286,7 @@ export const QuickDrawQuiz: React.FC<QuickDrawQuizProps> = ({
           </div>
         </div>
 
-        {/* Reveal Explanation (QZ-4) */}
+        {/* Reveal Explanation */}
         {isRevealed && (
           <div className="p-4 rounded-xl bg-surface-raised border border-line space-y-1">
             <span className="text-xs uppercase font-bold text-success">Explanation</span>
@@ -258,20 +299,21 @@ export const QuickDrawQuiz: React.FC<QuickDrawQuizProps> = ({
       <div className="flex items-center justify-between">
         <div className="text-xs text-text-muted">
           {lockedIn && !isRevealed ? (
-            <span className="text-warn font-semibold">✓ Answer locked in! Waiting for time…</span>
+            <span className="text-warn font-semibold">✓ Answer locked in! Waiting for other players…</span>
           ) : isRevealed ? (
-            <span>Question concluded</span>
+            <span>Question revealed!</span>
           ) : (
             <span>Lock in quickly for maximum time bonus!</span>
           )}
         </div>
 
-        {isHost && isRevealed && (
-          <Button variant="primary" onClick={nextQuestionOrFinish}>
-            {currentQuestionIdx >= questions.length - 1 ? 'View Final Podium' : 'Next Question'}
-            <ArrowRight className="w-4 h-4 ml-2" />
+        {isHost && isRevealed ? (
+          <Button variant="primary" onClick={handleNextQuestionOrFinish}>
+            {currentQuestionIdx >= questions.length - 1 ? 'View Final Podium' : 'Next Question →'}
           </Button>
-        )}
+        ) : isRevealed ? (
+          <span className="text-xs text-text-muted">Waiting for host…</span>
+        ) : null}
       </div>
     </div>
   );
