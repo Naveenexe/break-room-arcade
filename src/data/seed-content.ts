@@ -392,3 +392,4 @@ export const SEED_TYPING: TypingSeedItem[] = [
   { text: "A black bug bit a big black dog on his big black nose, and the big black dog bled bright blue ink on the floor.", category: "tongue-twisters", difficulty: 3 },
   { text: "Can you can a can as a canner can can a can? Quick nimble fingers race across the keys to reach the finish line.", category: "tongue-twisters", difficulty: 2 }
 ];
+

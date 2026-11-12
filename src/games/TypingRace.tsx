@@ -296,3 +296,4 @@ export const TypingRace: React.FC<TypingRaceProps> = ({
     </div>
   );
 };
+

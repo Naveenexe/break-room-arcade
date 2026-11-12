@@ -34,3 +34,4 @@ main().catch((err) => {
   console.error('Fatal simulator error:', err);
   process.exit(1);
 });
+

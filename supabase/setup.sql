@@ -310,7 +310,7 @@ create or replace function public.create_room(
 returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   v_user_id uuid := auth.uid();
@@ -337,9 +337,9 @@ begin
     exit when not exists (select 1 from public.rooms where code = v_code);
   end loop;
 
-  -- Hash password with pgcrypto bf
-  v_salt := gen_salt('bf', 8);
-  v_password_hash := crypt(v_clean_password, v_salt);
+  -- Hash password with pgcrypto bf (using extensions schema)
+  v_salt := extensions.gen_salt('bf', 8);
+  v_password_hash := extensions.crypt(v_clean_password, v_salt);
 
   -- Insert room
   insert into public.rooms (
@@ -398,7 +398,7 @@ create or replace function public.join_room(
 returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   v_user_id uuid := auth.uid();
@@ -431,7 +431,7 @@ begin
   end if;
 
   -- Verify password
-  if v_room.password_hash != crypt(trim(p_room_password), v_room.password_hash) then
+  if v_room.password_hash != extensions.crypt(trim(p_room_password), v_room.password_hash) then
     insert into public.join_rate_limits (user_id, attempt_time) values (v_user_id, now());
     raise exception 'Incorrect room password.';
   end if;
@@ -615,7 +615,7 @@ create or replace function public.import_content(p_payload jsonb)
 returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   v_is_admin boolean;
@@ -643,13 +643,13 @@ begin
   for v_item in select * from jsonb_array_elements(v_items) loop
     -- Compute normalized content hash
     if v_game = 'quiz' then
-      v_hash := encode(digest(lower(trim(regexp_replace(v_item->>'question', '\s+', ' ', 'g'))), 'sha256'), 'hex');
+      v_hash := encode(extensions.digest(lower(trim(regexp_replace(v_item->>'question', '\s+', ' ', 'g'))), 'sha256'), 'hex');
     elsif v_game = 'pictionary' then
-      v_hash := encode(digest(lower(trim(regexp_replace(v_item->>'word', '\s+', ' ', 'g'))), 'sha256'), 'hex');
+      v_hash := encode(extensions.digest(lower(trim(regexp_replace(v_item->>'word', '\s+', ' ', 'g'))), 'sha256'), 'hex');
     elsif v_game = 'charades' then
-      v_hash := encode(digest(lower(trim(regexp_replace(v_item->>'prompt', '\s+', ' ', 'g'))), 'sha256'), 'hex');
+      v_hash := encode(extensions.digest(lower(trim(regexp_replace(v_item->>'prompt', '\s+', ' ', 'g'))), 'sha256'), 'hex');
     elsif v_game = 'typing' then
-      v_hash := encode(digest(lower(trim(regexp_replace(v_item->>'text', '\s+', ' ', 'g'))), 'sha256'), 'hex');
+      v_hash := encode(extensions.digest(lower(trim(regexp_replace(v_item->>'text', '\s+', ' ', 'g'))), 'sha256'), 'hex');
     end if;
 
     begin

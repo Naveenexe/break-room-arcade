@@ -182,3 +182,4 @@ export const Podium: React.FC<PodiumProps> = ({
     </div>
   );
 };
+
