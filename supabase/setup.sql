@@ -156,29 +156,19 @@ create policy "Allow users to update their own profile"
   using (auth.uid() = id)
   with check (auth.uid() = id);
 
--- Rooms: Room members can view room details
-create policy "Room members can view room"
+-- Rooms: Authenticated users can read room state
+drop policy if exists "Room members can view room" on public.rooms;
+create policy "Allow authenticated to view rooms"
   on public.rooms for select
   to authenticated
-  using (
-    exists (
-      select 1 from public.room_players
-      where room_players.room_id = rooms.id
-        and room_players.user_id = auth.uid()
-    )
-  );
+  using (true);
 
--- Room Players: Room members can see other players in their room
-create policy "Room players viewable by fellow room members"
+-- Room Players: Authenticated users can view room players without recursive RLS loop
+drop policy if exists "Room players viewable by fellow room members" on public.room_players;
+create policy "Allow authenticated to view room players"
   on public.room_players for select
   to authenticated
-  using (
-    exists (
-      select 1 from public.room_players as rp
-      where rp.room_id = room_players.room_id
-        and rp.user_id = auth.uid()
-    )
-  );
+  using (true);
 
 -- Game Sessions: Viewable by room members
 create policy "Sessions viewable by room members"
