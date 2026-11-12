@@ -163,3 +163,4 @@ class TimeSyncManager {
 export const timeSync = new TimeSyncManager();
 export const correctedNow = () => timeSync.correctedNow();
 export const getRemainingMs = (phaseEndsAt: string | null) => timeSync.getRemainingMs(phaseEndsAt);
+

@@ -121,3 +121,4 @@ Supabase free tier projects pause after 7 days of inactivity. We included an aut
 3. Add a second secret:
    - Name: `SUPABASE_ANON_KEY`, Value: your Supabase `anon` key
 4. Done! GitHub Actions will keep your Supabase project warm and active automatically.
+

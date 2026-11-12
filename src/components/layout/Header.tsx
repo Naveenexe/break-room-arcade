@@ -152,3 +152,4 @@ export const Header: React.FC<HeaderProps> = ({ roomCode }) => {
     </header>
   );
 };
+

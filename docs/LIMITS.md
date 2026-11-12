@@ -24,3 +24,4 @@ Supabase Realtime counts messages as `sent x recipients`. In a 6-player room, ea
 | **Word Chain Blitz**| Discrete events | 1 event per valid word turn (~30 words) | ~180 messages |
 | **Lobby & Presence** | 10s heartbeat | State of record in Postgres Changes / Presence | ~1,080 messages |
 | **Total 30-Min Session** | - | - | **~14,070 messages** (well below the 40,000 budget!) |
+

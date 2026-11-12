@@ -167,3 +167,4 @@ export function evaluateGuess(guess: string, secretWord: string): 'correct' | 'c
 
   return 'wrong';
 }
+

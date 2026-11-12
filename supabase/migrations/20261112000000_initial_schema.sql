@@ -3,3 +3,4 @@
 -- See supabase/setup.sql for the full consolidated reference.
 
 \i supabase/setup.sql
+

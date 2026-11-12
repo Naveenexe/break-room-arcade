@@ -9,6 +9,8 @@ import { ProfileSetupPage } from '@/pages/profile/ProfileSetupPage';
 import { CreateRoomPage } from '@/pages/room/CreateRoomPage';
 import { JoinRoomPage } from '@/pages/room/JoinRoomPage';
 import { LobbyPage } from '@/pages/room/LobbyPage';
+import { AdminImportPage } from '@/pages/admin/AdminImportPage';
+import { AdminContentPage } from '@/pages/admin/AdminContentPage';
 import { AboutPage } from '@/pages/about/AboutPage';
 import { NotFoundPage } from '@/pages/not-found/NotFoundPage';
 
@@ -31,6 +33,8 @@ export const App: React.FC = () => {
           <Route path="join" element={<JoinRoomPage />} />
           <Route path="join/:code" element={<JoinRoomPage />} />
           <Route path="room/:code" element={<LobbyPage />} />
+          <Route path="admin/import" element={<AdminImportPage />} />
+          <Route path="admin/content" element={<AdminContentPage />} />
           <Route path="about" element={<AboutPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Route>

@@ -20,3 +20,4 @@
 - **Zustand**: MIT License (Paul Henschel)
 - **Zod**: MIT License (Colin McDonnell)
 - **Vitest**: MIT License (Vitest team)
+

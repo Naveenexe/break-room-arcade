@@ -110,3 +110,4 @@ export const SignUpPage: React.FC = () => {
     </div>
   );
 };
+
