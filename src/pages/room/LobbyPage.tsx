@@ -4,7 +4,6 @@ import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/auth-store';
 import { Avatar } from '@/components/ui/Avatar';
 import { Button } from '@/components/ui/Button';
-import { timeSync } from '@/lib/time-sync';
 import type { Room, RoomPlayer, Profile } from '@/types/database';
 import {
   Copy,
@@ -87,19 +86,26 @@ export const LobbyPage: React.FC = () => {
 
     if (!code || !isSupabaseConfigured) return;
 
-    // Realtime subscription on room and players changes
+    // Realtime subscription on room, players changes, and game start broadcasts
     const channel = supabase
-      .channel(`room_lobby:${code}`)
+      .channel(`room_lobby:${code}`, {
+        config: { broadcast: { self: true } },
+      })
+      .on('broadcast', { event: 'game_started' }, () => {
+        // Broadcast received: All players navigate immediately
+        navigate(`/room/${code}/play`);
+      })
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'rooms', filter: `code=eq.${code.toUpperCase()}` },
+        { event: '*', schema: 'public', table: 'rooms' },
         (payload) => {
           if (payload.new) {
             const updated = payload.new as Room;
-            setRoom(updated);
-            if (updated.status === 'in_game') {
-              // Game started! Navigate to game screen
-              navigate(`/room/${code}/play`);
+            if (updated.code === code.toUpperCase()) {
+              setRoom(updated);
+              if (updated.status === 'in_game') {
+                navigate(`/room/${code}/play`);
+              }
             }
           }
         }
@@ -173,20 +179,33 @@ export const LobbyPage: React.FC = () => {
     if (!room || !isHost || !canStart) return;
 
     try {
-      const countdownEndsAt = new Date(timeSync.correctedNow() + 4000).toISOString();
+      // 1. Authoritative server RPC call
+      const { error: rpcErr } = await supabase.rpc('start_game', {
+        p_room_id: room.id,
+        p_game: selectedGame,
+      });
 
-      await supabase
-        .from('rooms')
-        .update({
-          status: 'in_game',
-          current_game: selectedGame,
-          phase: 'countdown',
-          phase_started_at: new Date(timeSync.correctedNow()).toISOString(),
-          phase_ends_at: countdownEndsAt,
-          version: room.version + 1,
-          last_active_at: new Date().toISOString(),
-        })
-        .eq('id', room.id);
+      if (rpcErr) {
+        console.error('start_game RPC error:', rpcErr);
+        // Fallback to direct table update if RPC not yet created
+        await supabase
+          .from('rooms')
+          .update({
+            status: 'in_game',
+            current_game: selectedGame,
+            phase: 'countdown',
+            last_active_at: new Date().toISOString(),
+          })
+          .eq('id', room.id);
+      }
+
+      // 2. Broadcast to all connected players so their screens transition simultaneously
+      const channel = supabase.channel(`room_lobby:${code}`);
+      await channel.send({
+        type: 'broadcast',
+        event: 'game_started',
+        payload: { game: selectedGame, room_id: room.id },
+      });
 
       navigate(`/room/${room.code}/play`);
     } catch (err) {

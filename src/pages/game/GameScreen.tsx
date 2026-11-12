@@ -176,10 +176,12 @@ export const GameScreen: React.FC = () => {
     );
   }
 
-  // Active Game View
+  // Resolve active game with safe fallback so screen is NEVER blank
+  const activeGame = room.current_game || 'quiz';
+
   return (
     <div className="flex-1 flex flex-col">
-      {room.current_game === 'reaction' && (
+      {activeGame === 'reaction' && (
         <ReactionDuel
           room={room}
           players={players}
@@ -189,7 +191,7 @@ export const GameScreen: React.FC = () => {
         />
       )}
 
-      {room.current_game === 'typing' && (
+      {activeGame === 'typing' && (
         <TypingRace
           room={room}
           players={players}
@@ -199,7 +201,7 @@ export const GameScreen: React.FC = () => {
         />
       )}
 
-      {room.current_game === 'quiz' && (
+      {activeGame === 'quiz' && (
         <QuickDrawQuiz
           room={room}
           players={players}
@@ -209,7 +211,7 @@ export const GameScreen: React.FC = () => {
         />
       )}
 
-      {room.current_game === 'pictionary' && (
+      {activeGame === 'pictionary' && (
         <Pictionary
           room={room}
           players={players}
@@ -219,7 +221,7 @@ export const GameScreen: React.FC = () => {
         />
       )}
 
-      {room.current_game === 'charades' && (
+      {activeGame === 'charades' && (
         <EmojiCharades
           room={room}
           players={players}
@@ -229,7 +231,7 @@ export const GameScreen: React.FC = () => {
         />
       )}
 
-      {room.current_game === 'wordchain' && (
+      {activeGame === 'wordchain' && (
         <WordChainBlitz
           room={room}
           players={players}

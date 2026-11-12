@@ -158,10 +158,19 @@ create policy "Allow users to update their own profile"
 
 -- Rooms: Authenticated users can read room state
 drop policy if exists "Room members can view room" on public.rooms;
-create policy "Allow authenticated to view rooms"
+drop policy if exists "Allow read rooms" on public.rooms;
+create policy "Allow read rooms"
   on public.rooms for select
-  to authenticated
+  to authenticated, anon
   using (true);
+
+-- Allow room hosts to update their own rooms
+drop policy if exists "Allow hosts to update their rooms" on public.rooms;
+create policy "Allow hosts to update their rooms"
+  on public.rooms for update
+  to authenticated
+  using (host_id = auth.uid())
+  with check (host_id = auth.uid());
 
 -- Room Players: Authenticated users can view room players without recursive RLS loop
 drop policy if exists "Room players viewable by fellow room members" on public.room_players;
@@ -568,6 +577,52 @@ begin
   where id = p_room_id;
 
   return jsonb_build_object('success', true);
+end;
+$$;
+
+-- 6.8b start_game(room_id, game, options) - Host only (Authoritative start)
+create or replace function public.start_game(
+  p_room_id uuid,
+  p_game text,
+  p_options jsonb default '{}'::jsonb
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_room record;
+  v_ends_at timestamptz;
+begin
+  select * into v_room from public.rooms where id = p_room_id;
+  if not found then
+    raise exception 'Room not found';
+  end if;
+
+  if v_room.host_id != v_user_id then
+    raise exception 'Only the room host can start the game.';
+  end if;
+
+  v_ends_at := clock_timestamp() + interval '4 seconds';
+
+  update public.rooms
+  set status = 'in_game',
+      current_game = p_game,
+      phase = 'countdown',
+      phase_started_at = clock_timestamp(),
+      phase_ends_at = v_ends_at,
+      version = version + 1,
+      last_active_at = clock_timestamp()
+  where id = p_room_id;
+
+  return jsonb_build_object(
+    'success', true,
+    'current_game', p_game,
+    'phase', 'countdown',
+    'phase_ends_at', v_ends_at
+  );
 end;
 $$;
 
