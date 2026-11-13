@@ -132,12 +132,35 @@ begin
   if not exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
     create publication supabase_realtime;
   end if;
-end $$;
 
-alter publication supabase_realtime add table public.rooms;
-alter publication supabase_realtime add table public.room_players;
-alter publication supabase_realtime add table public.round_submissions;
-alter publication supabase_realtime add table public.round_strokes;
+  if not exists (
+    select 1 from pg_publication_tables 
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'rooms'
+  ) then
+    alter publication supabase_realtime add table public.rooms;
+  end if;
+
+  if not exists (
+    select 1 from pg_publication_tables 
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'room_players'
+  ) then
+    alter publication supabase_realtime add table public.room_players;
+  end if;
+
+  if not exists (
+    select 1 from pg_publication_tables 
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'round_submissions'
+  ) then
+    alter publication supabase_realtime add table public.round_submissions;
+  end if;
+
+  if not exists (
+    select 1 from pg_publication_tables 
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'round_strokes'
+  ) then
+    alter publication supabase_realtime add table public.round_strokes;
+  end if;
+end $$;
 
 -- ----------------------------------------------------------------------------
 -- 4. CORE ENGINE RPCS (Sections 2 & 4)
@@ -1048,3 +1071,4 @@ begin
   end if;
 end;
 $$;
+
