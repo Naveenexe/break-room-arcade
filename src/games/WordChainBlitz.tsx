@@ -7,7 +7,15 @@ import { sound } from '@/lib/sound';
 import { dictionary } from '@/data/dictionary';
 import { computeWordChainScore } from '@/lib/scoring';
 import type { Room, RoomPlayer, Profile } from '@/types/database';
-import { Link2, AlertCircle, Clock, Send } from 'lucide-react';
+import {
+  Link2,
+  Clock,
+  Send,
+  AlertCircle,
+  Zap,
+  Flame,
+  CheckCircle2,
+} from 'lucide-react';
 
 interface PlayerWithProfile extends RoomPlayer {
   profile?: Profile;
@@ -21,45 +29,206 @@ interface WordChainBlitzProps {
   onFinishGame: (finalScores: { [userId: string]: number }) => void;
 }
 
+export interface RoundTwistConfig {
+  name: string;
+  minWordLength: number;
+  initialTurnSecs: number;
+  minTurnSecs: number;
+  shrinkPerTurn: number;
+  description: string;
+}
+
+// WCB-2: Round Twists
+export function getRoundTwist(roundNo: number): RoundTwistConfig {
+  if (roundNo === 1) {
+    return {
+      name: 'Classic',
+      minWordLength: 3,
+      initialTurnSecs: 10,
+      minTurnSecs: 4,
+      shrinkPerTurn: 0.5,
+      description: 'Standard link! Min 3 letters, timer shrinks to 4s.',
+    };
+  }
+  if (roundNo === 2) {
+    return {
+      name: 'Long Words',
+      minWordLength: 5,
+      initialTurnSecs: 13,
+      minTurnSecs: 6,
+      shrinkPerTurn: 0.5,
+      description: 'Big vocabulary! Min 5 letters, timer starts at 13s.',
+    };
+  }
+  return {
+    name: 'Speed Round',
+    minWordLength: 3,
+    initialTurnSecs: 7,
+    minTurnSecs: 3,
+    shrinkPerTurn: 0.5,
+    description: 'Lightning reflex! Starts at 7s, shrinks down to 3s!',
+  };
+}
+
+// WCB-3: 200 Unambiguous Common Starter Words Pool
+export const STARTER_WORDS = [
+  'arcade', 'beacon', 'candle', 'dragon', 'empire', 'falcon', 'galaxy', 'harbor',
+  'island', 'jungle', 'knight', 'legend', 'meteor', 'nebula', 'orange', 'planet',
+  'quartz', 'rocket', 'shadow', 'timber', 'umbrella', 'valley', 'wizard', 'zenith',
+  'anchor', 'bridge', 'castle', 'desert', 'engine', 'forest', 'garden', 'helmet',
+  'impact', 'jacket', 'kettle', 'ladder', 'monkey', 'needle', 'oxygen', 'parade',
+  'quiver', 'rabbit', 'sailor', 'tunnel', 'urn', 'violet', 'walnut', 'xylophone',
+  'yellow', 'zipper', 'almond', 'badger', 'cactus', 'donkey', 'eagles', 'feather',
+  'guitar', 'hammer', 'iguana', 'jaguar', 'kitten', 'lizard', 'magnet', 'nickel',
+  'ostrich', 'pigeon', 'quiche', 'ribbon', 'shield', 'ticket', 'unicorn', 'vacuum',
+  'whistle', 'xerox', 'yogurt', 'zombie', 'acorn', 'barrel', 'clover', 'dolphin',
+  'elixir', 'fossil', 'goblet', 'hunter', 'insect', 'jigsaw', 'kernel', 'lantern',
+  'marble', 'nectar', 'origami', 'potion', 'quarry', 'radish', 'statue', 'target',
+  'urchin', 'vessel', 'weapon', 'yacht', 'safari', 'ballet', 'cradle', 'dynamo',
+  'enigma', 'flame', 'garage', 'horizon', 'iceberg', 'journey', 'katana', 'lagoon',
+  'monarch', 'nucleus', 'octopus', 'pyramid', 'quokka', 'ravine', 'spider', 'trophy',
+  'upgrade', 'volcano', 'whisper', 'yearling', 'zigzag', 'artist', 'bronze', 'cinema',
+  'dancer', 'emerald', 'future', 'glider', 'heroic', 'irony', 'jockey', 'karate',
+  'leopard', 'museum', 'nature', 'oracle', 'palace', 'quest', 'radar', 'samurai',
+  'temple', 'utopia', 'velvet', 'wizard', 'yonder', 'zephyr', 'atom', 'breeze',
+  'canvas', 'domino', 'echo', 'fable', 'gravity', 'haven', 'ivory', 'jewel',
+  'koala', 'lotus', 'matrix', 'ninja', 'oasis', 'prism', 'quasar', 'relic',
+  'signal', 'tower', 'unity', 'vortex', 'willow', 'yield', 'zeno', 'alpha',
+  'blaze', 'comet', 'drift', 'ember', 'frost', 'grove', 'hatch', 'image',
+  'karma', 'lemon', 'mirage', 'nova', 'orbit', 'pulse', 'ridge', 'spark',
+  'trail', 'urban', 'vapor', 'wave', 'yarn', 'atlas', 'bloom', 'coral'
+];
+
+export interface ValidationResult {
+  valid: boolean;
+  error?: 'already_used' | 'invalid_letter' | 'too_short' | 'not_in_dict';
+  message?: string;
+}
+
+// WCB-4: Authoritative Word Validation Helper
+export function validateWordChainSubmission(
+  word: string,
+  requiredLetter: string,
+  minWordLength: number,
+  usedWords: Set<string>,
+  isDictWord: (w: string) => boolean
+): ValidationResult {
+  const clean = word.trim().toLowerCase();
+
+  if (usedWords.has(clean)) {
+    return {
+      valid: false,
+      error: 'already_used',
+      message: `"${clean}" has already been used in this round!`,
+    };
+  }
+
+  if (!clean.startsWith(requiredLetter.toLowerCase())) {
+    return {
+      valid: false,
+      error: 'invalid_letter',
+      message: `Must start with the letter "${requiredLetter.toUpperCase()}"!`,
+    };
+  }
+
+  if (clean.length < minWordLength) {
+    return {
+      valid: false,
+      error: 'too_short',
+      message: `Too short! Minimum length is ${minWordLength} letters.`,
+    };
+  }
+
+  if (!isDictWord(clean)) {
+    return {
+      valid: false,
+      error: 'not_in_dict',
+      message: `"${clean}" was not found in the dictionary.`,
+    };
+  }
+
+  return { valid: true };
+}
+
 export const WordChainBlitz: React.FC<WordChainBlitzProps> = ({
   room,
   players,
   userId,
   onFinishGame,
 }) => {
-  const [activePlayers, setActivePlayers] = useState<string[]>(() => {
-    // Randomize initial turn order (WCB-5)
-    return [...players].map((p) => p.user_id).sort(() => 0.5 - Math.random());
-  });
+  const gameState = room.game_state || {};
+  const roundNo = Math.max(1, (gameState.round as number) || 1);
+  const totalRounds = 3; // WCB-1: default 3 rounds
+  const twist = getRoundTwist(roundNo);
 
+  // Alive players in the current round elimination battle
+  const [activePlayers, setActivePlayers] = useState<string[]>(() => {
+    return players.map((p) => p.user_id);
+  });
   const [currentTurnIdx, setCurrentTurnIdx] = useState(0);
-  const [wordChain, setWordChain] = useState<string[]>(['arcade']); // starting starter word
+
+  // Words played in this round
+  const [wordChain, setWordChain] = useState<string[]>(() => [
+    STARTER_WORDS[Math.floor(Math.random() * STARTER_WORDS.length)],
+  ]);
+  const [usedWordsSet, setUsedWordsSet] = useState<Set<string>>(new Set());
+
+  // Input, timing and validation feedback
   const [currentWordInput, setCurrentWordInput] = useState('');
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [turnLimitSecs, setTurnLimitSecs] = useState(10);
-  const [remainingSecs, setRemainingSecs] = useState(10);
+  const [validationError, setValidationError] = useState<ValidationResult | null>(null);
+  const [reportedWord, setReportedWord] = useState<string | null>(null);
+  const [turnLimitSecs, setTurnLimitSecs] = useState(twist.initialTurnSecs);
+  const [remainingSecs, setRemainingSecs] = useState(twist.initialTurnSecs);
+
+  // Stats and Cumulative Points
   const [wordCounts, setWordCounts] = useState<{ [uid: string]: number }>({});
+  const [longestWordInfo, setLongestWordInfo] = useState<{ word: string; userId: string }>({
+    word: '',
+    userId: '',
+  });
   const [eliminatedOrder, setEliminatedOrder] = useState<string[]>([]);
+  const [cumulativeScores, setCumulativeScores] = useState<{ [uid: string]: number }>({});
   const [isDictLoaded, setIsDictLoaded] = useState(false);
+  void cumulativeScores;
+  void isDictLoaded;
 
   const turnTimerRef = useRef<number | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
   const currentTurnUserId = activePlayers[currentTurnIdx];
   const isMyTurn = currentTurnUserId === userId;
+  const currentActivePlayer = players.find((p) => p.user_id === currentTurnUserId);
 
-  const previousWord = wordChain[wordChain.length - 1];
+  const previousWord = wordChain[wordChain.length - 1] || 'arcade';
   const requiredLetter = previousWord[previousWord.length - 1].toUpperCase();
 
-  // Load Dictionary (WCB-8)
+  // Load Dictionary (WCB-4)
   useEffect(() => {
-    dictionary.load().then((loaded) => {
-      setIsDictLoaded(loaded);
-    });
+    dictionary.load().then((loaded) => setIsDictLoaded(loaded));
   }, []);
 
-  // Turn Timer with Shrinking Bar (WCB-2)
-  const resetTurnTimer = (limit: number) => {
+  // Initialize Round
+  useEffect(() => {
+    const starter = STARTER_WORDS[Math.floor(Math.random() * STARTER_WORDS.length)];
+    setWordChain([starter]);
+    setUsedWordsSet(new Set([starter.toLowerCase()]));
+    setActivePlayers(players.map((p) => p.user_id));
+    setCurrentTurnIdx(0);
+    setEliminatedOrder([]);
+    setTurnLimitSecs(twist.initialTurnSecs);
+    setRemainingSecs(twist.initialTurnSecs);
+    setLongestWordInfo({ word: '', userId: '' });
+    setWordCounts({});
+    setValidationError(null);
+    setReportedWord(null);
+  }, [roundNo]);
+
+  // Turn Timer Loop (WCB-2 & WCB-5)
+  useEffect(() => {
+    if (activePlayers.length <= 1) return;
+
+    setRemainingSecs(turnLimitSecs);
     if (turnTimerRef.current) clearInterval(turnTimerRef.current);
-    setRemainingSecs(limit);
 
     turnTimerRef.current = window.setInterval(() => {
       setRemainingSecs((prev) => {
@@ -68,58 +237,64 @@ export const WordChainBlitz: React.FC<WordChainBlitzProps> = ({
           eliminateCurrentPlayer();
           return 0;
         }
-        if (prev <= 4) sound.playTick();
+        if (prev <= 3) sound.playTick();
         return prev - 1;
       });
     }, 1000);
-  };
 
-  useEffect(() => {
-    if (activePlayers.length > 1) {
-      resetTurnTimer(turnLimitSecs);
-    }
     return () => {
       if (turnTimerRef.current) clearInterval(turnTimerRef.current);
     };
   }, [currentTurnIdx, turnLimitSecs, activePlayers.length]);
 
-  // Realtime Broadcast for Word Submissions and Eliminations
+  // Focus input when my turn arrives
+  useEffect(() => {
+    if (isMyTurn && inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, [isMyTurn]);
+
+  // Realtime Broadcast Channel Listener
   useEffect(() => {
     const channel = supabase.channel(`wordchain:${room.id}`, {
       config: { broadcast: { self: false } },
     });
 
     channel
-      .on('broadcast', { event: 'word_submitted' }, ({ payload }) => {
+      .on('broadcast', { event: 'word_played' }, ({ payload }) => {
         setWordChain((prev) => [...prev, payload.word]);
+        setUsedWordsSet((prev) => new Set([...prev, payload.word.toLowerCase()]));
         setWordCounts((prev) => ({
           ...prev,
           [payload.userId]: (prev[payload.userId] || 0) + 1,
         }));
-        setTurnLimitSecs((prev) => Math.max(4, prev - 0.5));
+
+        if (payload.word.length > longestWordInfo.word.length) {
+          setLongestWordInfo({ word: payload.word, userId: payload.userId });
+        }
+
+        // Shrink turn timer according to twist
+        setTurnLimitSecs((prev) => Math.max(twist.minTurnSecs, prev - twist.shrinkPerTurn));
         setCurrentTurnIdx((idx) => (idx + 1) % activePlayers.length);
         sound.playCorrect();
       })
       .on('broadcast', { event: 'player_eliminated' }, ({ payload }) => {
         handleElimination(payload.userId);
       })
-      .on('broadcast', { event: 'wordchain_finished' }, ({ payload }) => {
-        onFinishGame(payload.finalScores);
-      })
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [room.id, activePlayers.length]);
+  }, [room.id, activePlayers.length, twist, longestWordInfo.word.length]);
 
-  // Eliminate Player on Timeout (WCB-4)
-  const eliminateCurrentPlayer = async () => {
+  // WCB-5: Elimination Logic (Required Letter Stays Same!)
+  const eliminateCurrentPlayer = () => {
     const eliminatedId = activePlayers[currentTurnIdx];
     handleElimination(eliminatedId);
 
     const channel = supabase.channel(`wordchain:${room.id}`);
-    await channel.send({
+    channel.send({
       type: 'broadcast',
       event: 'player_eliminated',
       payload: { userId: eliminatedId },
@@ -133,209 +308,290 @@ export const WordChainBlitz: React.FC<WordChainBlitzProps> = ({
     const remaining = activePlayers.filter((id) => id !== eliminatedId);
     setActivePlayers(remaining);
 
+    // If only 1 survivor left -> Round ends!
     if (remaining.length <= 1) {
-      // Game over! Winner found (WCB-6)
       const winnerId = remaining[0] || eliminatedId;
-      finishGame(winnerId, [...eliminatedOrder, eliminatedId]);
+      finishRound(winnerId, [...eliminatedOrder, eliminatedId]);
     } else {
+      // Next clockwise living player plays off the SAME required letter
       setCurrentTurnIdx((idx) => idx % remaining.length);
     }
   };
 
-  const finishGame = async (winnerId: string, eliminatedList: string[]) => {
-    const finalScores: { [uid: string]: number } = {};
-    const reversedElim = [...eliminatedList].reverse(); // 2nd, 3rd, etc.
+  // Complete Round and Award Scores (WCB-1 & WCB-6)
+  const finishRound = (winnerId: string, eliminatedList: string[]) => {
+    sound.playApplause();
 
-    // Winner
-    finalScores[winnerId] = computeWordChainScore(wordCounts[winnerId] || 0, 1);
+    // Placements: Winner is #1, then reverse of eliminated list
+    const roundScores: { [uid: string]: number } = {};
+    const reversedElim = [...eliminatedList].reverse(); // [2nd, 3rd, 4th...]
 
-    // 2nd, 3rd, and others
-    reversedElim.forEach((uid, index) => {
-      const placement = index + 2;
-      finalScores[uid] = computeWordChainScore(wordCounts[uid] || 0, placement);
+    // 1st place: 100 pts + word count * 10
+    roundScores[winnerId] = computeWordChainScore(wordCounts[winnerId] || 0, 1);
+
+    // 2nd, 3rd, etc.
+    reversedElim.forEach((uid, idx) => {
+      if (uid === winnerId) return;
+      const rank = idx + 2;
+      roundScores[uid] = computeWordChainScore(wordCounts[uid] || 0, rank);
     });
 
-    const channel = supabase.channel(`wordchain:${room.id}`);
-    await channel.send({
-      type: 'broadcast',
-      event: 'wordchain_finished',
-      payload: { finalScores },
-    });
+    // WCB-6: Longest word bonus (+20 pts)
+    if (longestWordInfo.userId && roundScores[longestWordInfo.userId] !== undefined) {
+      roundScores[longestWordInfo.userId] += 20;
+    }
 
-    onFinishGame(finalScores);
+    setCumulativeScores((prev) => {
+      const updated = { ...prev };
+      Object.entries(roundScores).forEach(([uid, score]) => {
+        updated[uid] = (updated[uid] || 0) + score;
+      });
+
+      if (roundNo >= totalRounds) {
+        onFinishGame(updated);
+      }
+      return updated;
+    });
   };
 
-  // Submit Word (WCB-1, WCB-3)
-  const handleSubmitWord = async (e: React.FormEvent) => {
+  // WCB-4: Word Submission
+  const handleSubmitWord = (e: React.FormEvent) => {
     e.preventDefault();
-    setErrorMsg(null);
     if (!isMyTurn) return;
 
-    const clean = currentWordInput.trim().toLowerCase();
+    const trimmed = currentWordInput.trim().toLowerCase();
+    setValidationError(null);
 
-    // 1. Length check
-    if (clean.length < 3) {
-      setErrorMsg('Word must have at least 3 letters.');
+    // Validate word
+    const validation = validateWordChainSubmission(
+      trimmed,
+      requiredLetter,
+      twist.minWordLength,
+      usedWordsSet,
+      (w) => dictionary.isValid(w)
+    );
+
+    if (!validation.valid) {
+      setValidationError(validation);
       sound.playWrong();
       return;
     }
 
-    // 2. Letters only
-    if (!/^[a-z]+$/.test(clean)) {
-      setErrorMsg('Letters only (no spaces or numbers).');
-      sound.playWrong();
-      return;
-    }
-
-    // 3. Must start with last letter of previous word
-    if (clean[0].toUpperCase() !== requiredLetter) {
-      setErrorMsg(`Must start with letter "${requiredLetter}"!`);
-      sound.playWrong();
-      return;
-    }
-
-    // 4. Duplicate check
-    if (wordChain.includes(clean)) {
-      setErrorMsg(`"${clean}" has already been used this match!`);
-      sound.playWrong();
-      return;
-    }
-
-    // 5. Dictionary validation
-    if (!dictionary.isValid(clean)) {
-      setErrorMsg(`"${clean}" is not in the dictionary.`);
-      sound.playWrong();
-      return;
-    }
-
-    // Success!
-    setCurrentWordInput('');
-    setWordChain((prev) => [...prev, clean]);
+    // Valid word!
+    sound.playCorrect();
+    setWordChain((prev) => [...prev, trimmed]);
+    setUsedWordsSet((prev) => new Set([...prev, trimmed]));
     setWordCounts((prev) => ({
       ...prev,
       [userId]: (prev[userId] || 0) + 1,
     }));
-    sound.playCorrect();
 
-    // Shrink timer by 0.5s down to 4s (WCB-2)
-    const nextLimit = Math.max(4, turnLimitSecs - 0.5);
-    setTurnLimitSecs(nextLimit);
-    setCurrentTurnIdx((idx) => (idx + 1) % activePlayers.length);
+    if (trimmed.length > longestWordInfo.word.length) {
+      setLongestWordInfo({ word: trimmed, userId });
+    }
 
+    setCurrentWordInput('');
+
+    // Broadcast word played
     const channel = supabase.channel(`wordchain:${room.id}`);
-    await channel.send({
+    channel.send({
       type: 'broadcast',
-      event: 'word_submitted',
-      payload: { word: clean, userId },
+      event: 'word_played',
+      payload: { word: trimmed, userId },
     });
+
+    // Shrink turn timer and advance turn
+    setTurnLimitSecs((prev) => Math.max(twist.minTurnSecs, prev - twist.shrinkPerTurn));
+    setCurrentTurnIdx((idx) => (idx + 1) % activePlayers.length);
+  };
+
+  // WCB-7: Dictionary Miss Reporting
+  const handleReportMiss = () => {
+    if (!validationError?.message || !currentWordInput) return;
+    const missWord = currentWordInput.trim().toLowerCase();
+    setReportedWord(missWord);
+
+    try {
+      const stored = JSON.parse(localStorage.getItem('bra_dictionary_misses') || '[]');
+      if (!stored.includes(missWord)) {
+        stored.push(missWord);
+        localStorage.setItem('bra_dictionary_misses', JSON.stringify(stored));
+      }
+    } catch {
+      // Ignore localStorage glitches
+    }
   };
 
   return (
-    <div className="flex-1 flex flex-col justify-between max-w-4xl mx-auto w-full py-4 space-y-6 select-none">
-      {/* Header */}
-      <div className="flex items-center justify-between pb-3 border-b border-line">
-        <div className="flex items-center gap-2">
-          <Link2 className="w-5 h-5 text-game-wordchain" />
-          <span className="font-heading font-bold text-lg text-text">Word Chain Blitz</span>
+    <div className="flex-1 flex flex-col max-w-4xl mx-auto w-full py-4 space-y-4 animate-fade select-none">
+      {/* Top Banner */}
+      <div className="flex items-center justify-between p-3.5 rounded-card bg-surface border-2 border-line shadow-tile">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-[10px] bg-game-wordchain text-ink flex items-center justify-center font-bold shadow-sm">
+            <Link2 className="w-5 h-5" />
+          </div>
+          <div>
+            <span className="font-heading font-black text-sm md:text-base text-text flex items-center gap-2">
+              Round {roundNo} of {totalRounds} •{' '}
+              <span className="text-primary">{twist.name} Twist</span>
+            </span>
+            <span className="text-xs text-text-muted">{twist.description}</span>
+          </div>
         </div>
 
-        <div className="flex items-center gap-4">
-          {!isDictLoaded && (
-            <span className="text-xs text-danger font-bold animate-pulse">
-              Dictionary loading…
-            </span>
-          )}
-          <span className="text-xs text-text-muted font-semibold">
-            {activePlayers.length} Players Remaining
-          </span>
-          <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-surface-raised border border-line text-sm font-heading font-black">
-            <Clock className="w-4 h-4 text-warn" />
-            <span className={remainingSecs <= 3 ? 'text-danger animate-pulse' : 'text-text'}>
-              {remainingSecs}s
-            </span>
-          </div>
+        {/* Turn Timer Badge */}
+        <div className="flex items-center gap-2 text-xs font-heading font-black px-3 py-1.5 rounded-[10px] bg-surface-raised border border-line shadow-tile-sm">
+          <Clock className={`w-3.5 h-3.5 ${remainingSecs <= 3 ? 'text-danger animate-pulse' : 'text-primary'}`} />
+          <span className="tabular-nums">{remainingSecs}s</span>
         </div>
       </div>
 
-      {/* Main Turn Display */}
-      <div className="bg-surface p-6 md:p-8 rounded-card border-2 border-line text-center space-y-6 shadow-xl">
-        {/* Next Letter Big Callout (WCB-2) */}
-        <div className="space-y-1">
-          <span className="text-xs font-bold uppercase tracking-wider text-text-muted">
-            Word must start with:
+      {/* Survivor Ring & Active Turn Bar */}
+      <div className="p-3.5 rounded-card bg-surface-raised border border-line flex flex-wrap items-center justify-between gap-3 shadow-tile-sm">
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] font-black uppercase tracking-wider text-text-muted">
+            Survivors ({activePlayers.length}/{players.length}):
           </span>
-          <div className="text-7xl md:text-8xl font-heading font-black text-game-wordchain filter drop-shadow">
-            {requiredLetter}
+          <div className="flex items-center gap-1.5">
+            {players.map((p) => {
+              const isAlive = activePlayers.includes(p.user_id);
+              const isCurrentTurn = p.user_id === currentTurnUserId;
+              return (
+                <div
+                  key={p.user_id}
+                  className={`relative p-1 rounded-full border-2 transition-transform ${
+                    isCurrentTurn
+                      ? 'border-primary ring-2 ring-primary/40 scale-110 shadow-md'
+                      : isAlive
+                      ? 'border-line bg-surface'
+                      : 'border-danger/40 opacity-40 grayscale'
+                  }`}
+                  title={`${p.profile?.display_name || 'Player'} (${isAlive ? 'Alive' : 'Eliminated'})`}
+                >
+                  <Avatar avatarId={p.profile?.avatar_id || 'avatar-01'} size="sm" />
+                </div>
+              );
+            })}
           </div>
-          <span className="text-xs text-text-muted">
-            Previous word: <strong className="text-text">{previousWord}</strong>
-          </span>
         </div>
 
-        {/* Dynamic Shrinking Turn Timer Bar */}
-        <div className="w-full bg-surface-raised h-3 rounded-full overflow-hidden border border-line">
-          <div
-            className={`h-full transition-all duration-1000 ${
-              remainingSecs <= 3 ? 'bg-danger' : 'bg-primary'
-            }`}
-            style={{ width: `${(remainingSecs / turnLimitSecs) * 100}%` }}
-          />
-        </div>
-
-        {/* Current Turn Indicator */}
-        <div className="flex items-center justify-center gap-3">
-          <Avatar
-            avatarId={players.find((p) => p.user_id === currentTurnUserId)?.profile?.avatar_id || 'avatar-01'}
-            name={players.find((p) => p.user_id === currentTurnUserId)?.profile?.display_name || 'Player'}
-            size="md"
-          />
-          <div className="text-left">
-            <span className="block text-xs uppercase font-bold text-text-muted">Current Turn</span>
-            <span className="font-heading font-bold text-lg text-text">
-              {isMyTurn ? "It's your turn!" : players.find((p) => p.user_id === currentTurnUserId)?.profile?.display_name}
+        {/* Longest Word Badge (WCB-6) */}
+        {longestWordInfo.word && (
+          <div className="flex items-center gap-1.5 text-xs font-heading font-bold text-warn bg-surface px-2.5 py-1 rounded-button border border-line">
+            <Flame className="w-3.5 h-3.5" />
+            <span>
+              Longest: &quot;{longestWordInfo.word}&quot; (+20 pts)
             </span>
-          </div>
-        </div>
-
-        {/* Input Form for Current Player */}
-        {isMyTurn ? (
-          <form onSubmit={handleSubmitWord} className="max-w-md mx-auto space-y-3">
-            <div className="flex gap-2">
-              <Input
-                placeholder={`Type a word starting with ${requiredLetter}…`}
-                value={currentWordInput}
-                onChange={(e) => setCurrentWordInput(e.target.value)}
-                autoFocus
-                className="font-heading font-bold text-lg"
-              />
-              <Button type="submit" variant="primary">
-                <Send className="w-4 h-4" />
-              </Button>
-            </div>
-            {errorMsg && (
-              <span className="text-xs font-bold text-danger flex items-center justify-center gap-1">
-                <AlertCircle className="w-4 h-4" /> {errorMsg}
-              </span>
-            )}
-          </form>
-        ) : (
-          <div className="text-xs text-text-muted">
-            Waiting for {players.find((p) => p.user_id === currentTurnUserId)?.profile?.display_name} to link a word…
           </div>
         )}
       </div>
 
-      {/* Chain So Far (WCB-7) */}
-      <div className="bg-surface p-4 rounded-card border-2 border-line space-y-2 shadow-lg">
-        <span className="text-xs uppercase font-bold text-text-muted flex items-center gap-2">
-          <Link2 className="w-4 h-4 text-primary" />
-          Chain So Far ({wordChain.length} words)
+      {/* Chain Stream & Big Required Letter Card */}
+      <div className="p-6 md:p-8 rounded-card bg-surface border-2 border-line shadow-tile flex flex-col items-center justify-center space-y-6 text-center">
+        {/* Previous Word Display */}
+        <div className="space-y-1">
+          <span className="text-xs font-black uppercase tracking-widest text-text-muted">
+            Previous Linked Word
+          </span>
+          <div className="text-3xl md:text-5xl font-black font-heading text-text capitalize tracking-wide flex items-center justify-center gap-1">
+            {previousWord.slice(0, -1)}
+            <span className="text-primary underline decoration-4 decoration-primary">
+              {previousWord.slice(-1)}
+            </span>
+          </div>
+        </div>
+
+        {/* Required Letter Callout */}
+        <div className="w-24 h-24 md:w-28 md:h-28 rounded-card bg-primary text-ink border-4 border-ink flex flex-col items-center justify-center shadow-tile transform hover:scale-105 transition-transform">
+          <span className="text-[10px] font-black uppercase tracking-wider text-ink/75">
+            Starts With
+          </span>
+          <span className="text-5xl md:text-6xl font-black font-heading leading-none">
+            {requiredLetter}
+          </span>
+        </div>
+
+        {/* Turn Prompt Message */}
+        <div className="font-heading font-black text-sm">
+          {isMyTurn ? (
+            <span className="text-primary flex items-center justify-center gap-1 text-base animate-pulse">
+              <Zap className="w-4 h-4" /> It is YOUR turn! Type a word starting with &quot;{requiredLetter}&quot;!
+            </span>
+          ) : (
+            <span className="text-text-muted">
+              Waiting for{' '}
+              <strong className="text-text">{currentActivePlayer?.profile?.display_name || 'Player'}</strong>…
+            </span>
+          )}
+        </div>
+
+        {/* Word Submission Form */}
+        {isMyTurn && (
+          <form
+            onSubmit={handleSubmitWord}
+            className="w-full max-w-md flex flex-col items-center space-y-3"
+          >
+            <div className="w-full flex items-center gap-2">
+              <Input
+                ref={inputRef}
+                value={currentWordInput}
+                onChange={(e) => {
+                  setCurrentWordInput(e.target.value);
+                  setValidationError(null);
+                }}
+                placeholder={`Type a word starting with '${requiredLetter}'…`}
+                className="text-base font-bold text-center h-12"
+                autoComplete="off"
+                spellCheck="false"
+              />
+              <Button type="submit" variant="primary" className="h-12 px-5 font-black">
+                <Send className="w-4 h-4 mr-1" /> Link
+              </Button>
+            </div>
+
+            {/* Validation Rejection Feedback (WCB-4) */}
+            {validationError && (
+              <div className="w-full p-2.5 rounded-[8px] bg-danger/10 border border-danger/30 text-danger text-xs font-heading font-bold flex items-center justify-between animate-fade">
+                <div className="flex items-center gap-1.5">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{validationError.message}</span>
+                </div>
+
+                {/* Challenge / Report Word Button (WCB-7) */}
+                {validationError.error === 'not_in_dict' && !reportedWord && (
+                  <button
+                    type="button"
+                    onClick={handleReportMiss}
+                    className="text-[11px] underline font-black text-ink hover:text-primary whitespace-nowrap ml-2"
+                  >
+                    Report word
+                  </button>
+                )}
+                {reportedWord && (
+                  <span className="text-[10px] text-success font-black flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3" /> Reported!
+                  </span>
+                )}
+              </div>
+            )}
+          </form>
+        )}
+      </div>
+
+      {/* Chain History Roll */}
+      <div className="tile p-4 bg-surface-raised space-y-2">
+        <span className="text-xs font-black uppercase tracking-wider text-text-muted">
+          Round Word Chain ({wordChain.length} links)
         </span>
-        <div className="flex items-center gap-2 overflow-x-auto pb-2 text-sm font-heading font-bold">
-          {wordChain.slice(-10).map((w, idx) => (
+        <div className="flex flex-wrap gap-1.5 max-h-[110px] overflow-y-auto">
+          {wordChain.map((w, idx) => (
             <span
               key={idx}
-              className="px-3 py-1 rounded-full bg-surface-raised border border-line flex-shrink-0"
+              className={`px-2.5 py-1 rounded-[6px] text-xs font-mono font-bold border ${
+                idx === wordChain.length - 1
+                  ? 'bg-primary text-ink border-ink font-black shadow-sm'
+                  : 'bg-surface border-line text-text'
+              }`}
             >
               {w}
             </span>

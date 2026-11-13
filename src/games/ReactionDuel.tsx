@@ -1,11 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Avatar } from '@/components/ui/Avatar';
-import { Button } from '@/components/ui/Button';
 import { sound } from '@/lib/sound';
 import { computeReactionRoundScore } from '@/lib/scoring';
 import type { Room, RoomPlayer, Profile } from '@/types/database';
-import { Zap, AlertTriangle } from 'lucide-react';
+import { Zap, AlertTriangle, Crosshair, Clock } from 'lucide-react';
 
 interface PlayerWithProfile extends RoomPlayer {
   profile?: Profile;
@@ -19,12 +18,11 @@ interface ReactionDuelProps {
   onFinishGame: (finalScores: { [userId: string]: number }) => void;
 }
 
-interface RoundResult {
+interface TapResult {
   userId: string;
   timeMs: number | null;
   isFalseStart: boolean;
   score: number;
-  [key: string]: unknown;
 }
 
 export const ReactionDuel: React.FC<ReactionDuelProps> = ({
@@ -34,366 +32,423 @@ export const ReactionDuel: React.FC<ReactionDuelProps> = ({
   isHost,
   onFinishGame,
 }) => {
-  const [currentRound, setCurrentRound] = useState(1);
-  const totalRounds = 5;
+  const gameState = room.game_state || {};
+  const roundNo = Math.max(1, (gameState.round as number) || 1);
+  const totalRounds = Math.max(5, (gameState.totalRounds as number) || 7);
 
-  // Global synchronized states: 'ready' | 'waiting' | 'go' | 'round_result'
-  const [gameState, setGameState] = useState<'ready' | 'waiting' | 'go' | 'round_result'>('ready');
-  const [hasTappedThisRound, setHasTappedThisRound] = useState(false);
-  const [reactionTime, setReactionTime] = useState<number | null>(null);
-
-  const [roundTaps, setRoundTaps] = useState<RoundResult[]>([]);
-  const [cumulativeScores, setCumulativeScores] = useState<{ [uid: string]: number }>({});
-
-  const goPaintedTimeRef = useRef<number>(0);
-  const timerTimeoutRef = useRef<number | null>(null);
-  const roundResultsCalculatedRef = useRef(false);
-
-  // Broadcast helper
-  const sendBroadcast = useCallback(
-    async (event: string, payload: Record<string, unknown>) => {
-      const channel = supabase.channel(`reaction:${room.id}`);
-      await channel.send({
-        type: 'broadcast',
-        event,
-        payload,
-      });
-    },
-    [room.id]
-  );
-
-  // Synchronized Realtime Event Bus
-  useEffect(() => {
-    const channel = supabase.channel(`reaction:${room.id}`, {
-      config: { broadcast: { self: true } },
-    });
-
-    channel
-      .on('broadcast', { event: 'start_waiting' }, ({ payload }) => {
-        // All players enter "Wait for green..." at the same time
-        setCurrentRound(payload.round);
-        setGameState('waiting');
-        setHasTappedThisRound(false);
-        setReactionTime(null);
-        setRoundTaps([]);
-        roundResultsCalculatedRef.current = false;
-      })
-      .on('broadcast', { event: 'go_signal' }, () => {
-        // All players turn green at the exact same instant
-        requestAnimationFrame(() => {
-          goPaintedTimeRef.current = performance.now();
-          setGameState('go');
-          sound.playGo();
-        });
-      })
-      .on('broadcast', { event: 'player_tapped' }, ({ payload }) => {
-        setRoundTaps((prev) => {
-          if (prev.some((t) => t.userId === payload.userId)) return prev;
-          return [...prev, payload];
-        });
-      })
-      .on('broadcast', { event: 'round_concluded' }, ({ payload }) => {
-        // All players see the exact same results table simultaneously
-        setRoundTaps(payload.rankedResults);
-        setCumulativeScores(payload.cumulativeScores);
-        setGameState('round_result');
-      })
-      .on('broadcast', { event: 'advance_round' }, ({ payload }) => {
-        // All players transition to the next round together
-        setCurrentRound(payload.nextRound);
-        setGameState('ready');
-        setHasTappedThisRound(false);
-        setRoundTaps([]);
-      })
-      .on('broadcast', { event: 'duel_finished' }, ({ payload }) => {
-        onFinishGame(payload.finalScores);
-      })
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-      if (timerTimeoutRef.current) clearTimeout(timerTimeoutRef.current);
-    };
-  }, [room.id, onFinishGame]);
-
-  // Host starts the countdown for the round
-  const handleHostStartRound = async () => {
-    if (!isHost) return;
-
-    // 1. Tell all players to enter "Wait for green..."
-    await sendBroadcast('start_waiting', { round: currentRound });
-
-    // 2. Schedule the random GO delay between 2.5s and 6s (REA-1)
-    const delayMs = Math.floor(Math.random() * 3500) + 2500;
-    if (timerTimeoutRef.current) clearTimeout(timerTimeoutRef.current);
-
-    timerTimeoutRef.current = window.setTimeout(async () => {
-      await sendBroadcast('go_signal', { round: currentRound });
-    }, delayMs);
+  // Round Types Sequence (Classic, Classic, Decoy, Target, Classic, Decoy, Target)
+  const getRoundType = (r: number): 'classic' | 'decoy' | 'target' => {
+    if (r === 1 || r === 2) return 'classic';
+    const pattern = ['decoy', 'target', 'classic'] as const;
+    return pattern[(r - 3) % 3];
   };
 
-  // Player Tap Action (Keyboard or Touch)
-  const handleTap = async () => {
-    if (hasTappedThisRound) return;
+  const roundType = getRoundType(roundNo);
+  const isTargetRound = roundType === 'target';
+  const isDecoyRound = roundType === 'decoy';
 
-    if (gameState === 'waiting') {
-      // False start! (REA-3)
-      setHasTappedThisRound(true);
+  const phase = room.phase || 'wait';
+  const isIntro = phase === 'intro';
+  const isWait = phase === 'wait';
+  const isGo = phase === 'go';
+  const isResult = phase === 'result';
+
+  const [hasTapped, setHasTapped] = useState(false);
+  const [reactionTime, setReactionTime] = useState<number | null>(null);
+  const [isFalseStart, setIsFalseStart] = useState(false);
+  const [roundTaps, setRoundTaps] = useState<TapResult[]>([]);
+  const [cumulativeScores, setCumulativeScores] = useState<{ [uid: string]: number }>({});
+  void cumulativeScores;
+  const [decoyColor, setDecoyColor] = useState<string | null>(null);
+  const [targetPos, setTargetPos] = useState<{ x: number; y: number }>({ x: 50, y: 50 });
+  const [shakeTarget, setShakeTarget] = useState(false);
+
+  const goPaintedTimeRef = useRef<number>(0);
+  const directorTimerRef = useRef<number | null>(null);
+
+  // Director determination: host or earliest-joined connected player
+  const isDirector = isHost || (players.length > 0 && players[0].user_id === userId);
+
+  // Reset round state
+  useEffect(() => {
+    setHasTapped(false);
+    setReactionTime(null);
+    setIsFalseStart(false);
+    setDecoyColor(null);
+    setRoundTaps([]);
+    setShakeTarget(false);
+
+    // Seed target position for Target rounds
+    if (isTargetRound) {
+      const rx = Math.floor(Math.random() * 60) + 20; // 20% to 80%
+      const ry = Math.floor(Math.random() * 50) + 25;
+      setTargetPos({ x: rx, y: ry });
+    }
+  }, [roundNo, roundType, isTargetRound]);
+
+  // REA-1: Director calls signal_go after secret delay
+  useEffect(() => {
+    if (!isDirector || !isWait) return;
+
+    // Random delay between 2.0s and 6.5s
+    const delayMs = Math.floor(Math.random() * 4500) + 2000;
+    if (directorTimerRef.current) clearTimeout(directorTimerRef.current);
+
+    directorTimerRef.current = window.setTimeout(async () => {
+      try {
+        await supabase.rpc('signal_go', {
+          p_room_id: room.id,
+          p_round_no: roundNo,
+        });
+      } catch {
+        // Handled by 9.5s void rule
+      }
+    }, delayMs);
+
+    return () => {
+      if (directorTimerRef.current) clearTimeout(directorTimerRef.current);
+    };
+  }, [isDirector, isWait, room.id, roundNo]);
+
+  // Decoy color flasher for Decoy rounds during 'wait'
+  useEffect(() => {
+    if (!isWait || !isDecoyRound) {
+      setDecoyColor(null);
+      return;
+    }
+
+    const decoyColors = ['#4F7CFF', '#FF8FB8', '#8F6BFF']; // blue, pink, purple
+    const flashInterval = window.setInterval(() => {
+      // 40% chance of random decoy flash every 700ms
+      if (Math.random() > 0.6) {
+        const picked = decoyColors[Math.floor(Math.random() * decoyColors.length)];
+        setDecoyColor(picked);
+        window.setTimeout(() => setDecoyColor(null), 300);
+      }
+    }, 700);
+
+    return () => clearInterval(flashInterval);
+  }, [isWait, isDecoyRound]);
+
+  // REA-2: Hardware paint timestamping via requestAnimationFrame when 'go' arrives
+  useEffect(() => {
+    if (!isGo) return;
+
+    requestAnimationFrame(() => {
+      goPaintedTimeRef.current = performance.now();
+      sound.playGo();
+    });
+  }, [isGo]);
+
+  // Handle Tap Action
+  const handleTap = useCallback(async () => {
+    if (hasTapped || isResult) return;
+
+    // REA-3: False start during 'wait' or decoy flash
+    if (isWait) {
+      setHasTapped(true);
+      setIsFalseStart(true);
       sound.playWrong();
 
-      const tapData: RoundResult = {
+      const tapData: TapResult = {
         userId,
         timeMs: null,
         isFalseStart: true,
         score: 0,
       };
 
-      await sendBroadcast('player_tapped', tapData);
+      setRoundTaps((prev) => [...prev, tapData]);
+
+      // Call authoritative RPC
+      void (async () => {
+        try {
+          await supabase.rpc('submit_reaction', {
+            p_room_id: room.id,
+            p_round_no: roundNo,
+            p_ms: 0,
+            p_kind: 'false_start',
+          });
+        } catch {
+          // ignore
+        }
+      })();
+
+      // Broadcast tap to peers
+      const channel = supabase.channel(`reaction:${room.id}`);
+      channel.send({
+        type: 'broadcast',
+        event: 'player_tapped',
+        payload: tapData,
+      });
       return;
     }
 
-    if (gameState === 'go') {
+    // REA-2 & REA-4: Valid reaction tap during 'go'
+    if (isGo) {
       const now = performance.now();
       const elapsed = Math.round(now - goPaintedTimeRef.current);
 
-      setHasTappedThisRound(true);
-      const falseStart = elapsed < 80;
-      setReactionTime(elapsed);
+      setHasTapped(true);
+      const isTooEarly = elapsed < 80;
 
-      if (falseStart) {
+      if (isTooEarly) {
+        setIsFalseStart(true);
         sound.playWrong();
       } else {
+        setReactionTime(elapsed);
         sound.playCorrect();
       }
 
-      const tapData: RoundResult = {
+      const tapData: TapResult = {
         userId,
-        timeMs: elapsed,
-        isFalseStart: falseStart,
+        timeMs: isTooEarly ? null : elapsed,
+        isFalseStart: isTooEarly,
         score: 0,
       };
 
-      await sendBroadcast('player_tapped', tapData);
-    }
-  };
+      setRoundTaps((prev) => [...prev, tapData]);
 
-  // Host evaluates and synchronizes round results when all players tapped (or timeout)
-  useEffect(() => {
-    if (!isHost) return;
-    if (gameState !== 'go' && gameState !== 'waiting') return;
-    if (roundResultsCalculatedRef.current) return;
-
-    // Check if everyone has tapped
-    const totalConnected = players.length;
-    if (roundTaps.length >= totalConnected && totalConnected > 0) {
-      roundResultsCalculatedRef.current = true;
-
-      // Sort valid taps by timeMs ascending
-      const validTaps = roundTaps
-        .filter((t) => !t.isFalseStart && t.timeMs !== null)
-        .sort((a, b) => (a.timeMs || 0) - (b.timeMs || 0));
-
-      const updatedScores = { ...cumulativeScores };
-      const ranked: RoundResult[] = roundTaps.map((t) => {
-        if (t.isFalseStart || !t.timeMs) {
-          return { ...t, score: 0 };
+      // Call authoritative RPC
+      void (async () => {
+        try {
+          await supabase.rpc('submit_reaction', {
+            p_room_id: room.id,
+            p_round_no: roundNo,
+            p_ms: elapsed,
+            p_kind: isTooEarly ? 'false_start' : 'tap',
+          });
+        } catch {
+          // ignore
         }
-        const rankIndex = validTaps.findIndex((v) => v.userId === t.userId);
-        const pts = computeReactionRoundScore(rankIndex + 1, false, t.timeMs);
-        updatedScores[t.userId] = (updatedScores[t.userId] || 0) + pts;
-        return { ...t, score: pts };
-      });
+      })();
 
-      // Broadcast concluded results to everyone
-      sendBroadcast('round_concluded', {
-        rankedResults: ranked,
-        cumulativeScores: updatedScores,
+      const channel = supabase.channel(`reaction:${room.id}`);
+      channel.send({
+        type: 'broadcast',
+        event: 'player_tapped',
+        payload: tapData,
       });
     }
-  }, [isHost, gameState, roundTaps, players.length, cumulativeScores, sendBroadcast]);
+  }, [hasTapped, isWait, isGo, isResult, userId, room.id, roundNo]);
 
-  // Host advances everyone to the next round or the podium
-  const handleNextRoundOrFinish = async () => {
-    if (!isHost) return;
-
-    if (currentRound >= totalRounds) {
-      await sendBroadcast('duel_finished', { finalScores: cumulativeScores });
-      onFinishGame(cumulativeScores);
-    } else {
-      await sendBroadcast('advance_round', { nextRound: currentRound + 1 });
-    }
+  // Target Round Click Handler (tap inside target circle)
+  const handleTargetClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    handleTap();
   };
 
-  // Space / Enter keyboard support (REA-7)
+  const handleMissedTarget = () => {
+    if (!isGo || !isTargetRound || hasTapped) return;
+    setShakeTarget(true);
+    sound.playTick();
+    setTimeout(() => setShakeTarget(false), 250);
+  };
+
+  // Realtime subscription for peer taps
+  useEffect(() => {
+    const channel = supabase.channel(`reaction:${room.id}`, {
+      config: { broadcast: { self: true } },
+    });
+
+    channel
+      .on('broadcast', { event: 'player_tapped' }, ({ payload }) => {
+        setRoundTaps((prev) => {
+          if (prev.some((t) => t.userId === payload.userId)) return prev;
+          return [...prev, payload];
+        });
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [room.id]);
+
+  // Evaluate Round Scores on Result Phase
+  useEffect(() => {
+    if (!isResult) return;
+
+    // Filter valid taps and rank fastest first
+    const validTaps = roundTaps
+      .filter((t) => !t.isFalseStart && t.timeMs !== null)
+      .sort((a, b) => (a.timeMs || 0) - (b.timeMs || 0));
+
+    const myRankIdx = validTaps.findIndex((t) => t.userId === userId);
+    let pts = 0;
+    if (myRankIdx !== -1 && !isFalseStart && reactionTime) {
+      pts = computeReactionRoundScore(myRankIdx + 1, false, reactionTime);
+      if (isTargetRound) {
+        pts = Math.round(pts * 1.25); // Target rounds worth x1.25
+      }
+    }
+
+    setCumulativeScores((prev) => {
+      const updated = { ...prev, [userId]: (prev[userId] || 0) + pts };
+      if (roundNo >= totalRounds) {
+        onFinishGame(updated);
+      }
+      return updated;
+    });
+  }, [isResult]);
+
+  // Keyboard space / enter tap support (REA-7)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code === 'Space' || e.code === 'Enter') {
         e.preventDefault();
-        handleTap();
+        if (!isTargetRound) {
+          handleTap();
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [gameState, hasTappedThisRound]);
+  }, [handleTap, isTargetRound]);
+
+  // Background color selection
+  let screenBg = 'bg-surface';
+  if (isWait) {
+    screenBg = decoyColor ? '' : 'bg-game-wait';
+  } else if (isGo) {
+    screenBg = 'bg-game-go';
+  }
 
   return (
-    <div className="flex-1 flex flex-col justify-between max-w-4xl mx-auto w-full py-4 select-none">
-      {/* Top Header */}
-      <div className="flex items-center justify-between pb-3 border-b border-line">
-        <div className="flex items-center gap-2">
-          <Zap className="w-5 h-5 text-game-reaction" />
-          <span className="font-heading font-bold text-lg text-text">Reaction Duel</span>
+    <div className="flex-1 flex flex-col justify-between max-w-4xl mx-auto w-full py-4 space-y-6 select-none animate-fade">
+      {/* Header Banner */}
+      <div className="w-full flex items-center justify-between p-3.5 rounded-card bg-surface border-2 border-line shadow-tile">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-[10px] bg-game-reaction text-ink flex items-center justify-center font-bold shadow-sm">
+            <Zap className="w-5 h-5 fill-ink" />
+          </div>
+          <div>
+            <span className="font-heading font-black text-sm md:text-base text-text flex items-center gap-2">
+              Round {roundNo} of {totalRounds} •{' '}
+              <span className="capitalize">{roundType} Mode</span>
+              {isTargetRound && (
+                <span className="px-2 py-0.5 rounded-[6px] bg-warn text-ink text-[11px] font-black uppercase tracking-wider">
+                  🎯 1.25x Multiplier
+                </span>
+              )}
+            </span>
+            <span className="text-xs text-text-muted">
+              {roundType === 'classic' && 'Tap as fast as you can when screen turns green'}
+              {roundType === 'decoy' && 'Watch out for decoy color flashes! Tap ONLY on green'}
+              {roundType === 'target' && 'Tap directly inside the target circle when green'}
+            </span>
+          </div>
         </div>
-        <div className="font-heading font-bold text-sm text-text-muted">
-          Round {currentRound} of {totalRounds}
+
+        <div className="flex items-center gap-2 text-xs font-heading font-black px-3 py-1.5 rounded-[10px] bg-surface-raised border border-line shadow-tile-sm">
+          <Clock className="w-3.5 h-3.5 text-warn" />
+          <span>{phase.toUpperCase()}</span>
         </div>
       </div>
 
-      {/* Main Interactive Arena */}
-      <div className="flex-1 flex items-center justify-center my-6">
-        {/* State: Ready */}
-        {gameState === 'ready' && (
-          <div className="text-center space-y-4 max-w-md">
-            <div className="w-20 h-20 rounded-full bg-game-reaction/20 border-2 border-game-reaction mx-auto flex items-center justify-center text-3xl">
-              ⚡
-            </div>
-            <h2 className="text-2xl font-black font-heading text-text">Get Ready for Round {currentRound}!</h2>
-            <p className="text-sm text-text-muted">
-              Tap as fast as you can the instant the screen turns bright green. Tapping early counts as a false start!
+      {/* Main Duel Surface */}
+      <div
+        onClick={isTargetRound ? handleMissedTarget : handleTap}
+        style={{ backgroundColor: decoyColor || undefined }}
+        className={`w-full min-h-[380px] md:min-h-[440px] rounded-card border-2 border-line flex flex-col items-center justify-center p-6 relative transition-colors duration-75 cursor-pointer shadow-tile-lg ${screenBg}`}
+      >
+        {isIntro && (
+          <div className="text-center space-y-3">
+            <span className="text-xs font-black uppercase tracking-widest text-primary">Get Ready</span>
+            <h2 className="text-3xl md:text-5xl font-black font-heading text-text capitalize">
+              {roundType} Round
+            </h2>
+            <p className="text-sm font-heading font-bold text-text-muted max-w-md">
+              {roundType === 'classic' && 'Screen will turn bright green. Tap anywhere!'}
+              {roundType === 'decoy' && 'Do not tap on blue, pink, or purple. Green is the only signal.'}
+              {roundType === 'target' && 'Find the round target and tap inside!'}
             </p>
-            {isHost ? (
-              <Button variant="primary" size="lg" onClick={handleHostStartRound} fullWidth>
-                Start Round {currentRound}
-              </Button>
-            ) : (
-              <div className="p-3 rounded-full bg-surface-raised border border-line text-xs font-semibold text-text-muted">
-                Waiting for host to start Round {currentRound}…
-              </div>
-            )}
           </div>
         )}
 
-        {/* State: Waiting ("Wait for green...") */}
-        {gameState === 'waiting' && (
-          <button
-            onClick={handleTap}
-            className={`w-full h-80 rounded-modal border-4 transition-all flex flex-col items-center justify-center cursor-pointer ${
-              hasTappedThisRound
-                ? 'bg-danger/20 border-danger'
-                : 'bg-warn/25 border-warn active:scale-[0.99]'
-            }`}
-          >
-            {hasTappedThisRound ? (
-              <div className="text-center space-y-2">
-                <AlertTriangle className="w-12 h-12 text-danger mx-auto animate-bounce" />
-                <span className="text-3xl font-heading font-black text-danger">TOO EARLY!</span>
-                <p className="text-xs text-text-muted">False start detected. 0 points this round.</p>
-              </div>
-            ) : (
-              <>
-                <span className="text-3xl sm:text-4xl font-heading font-black text-warn animate-pulse">
-                  Wait for green…
-                </span>
-                <span className="text-xs text-text-muted mt-2">Tap anywhere or press Space</span>
-              </>
-            )}
-          </button>
+        {isWait && (
+          <div className="text-center space-y-3 pointer-events-none">
+            <h2 className="text-3xl md:text-5xl font-black font-heading text-ink">
+              {decoyColor ? 'STAY BACK!' : 'Wait for green…'}
+            </h2>
+            <p className="text-sm font-heading font-bold text-ink/75">
+              {isFalseStart ? '⚠️ False start! Locked out this round' : 'Tap anywhere or press Space'}
+            </p>
+          </div>
         )}
 
-        {/* State: Green GO! ("TAP NOW!") */}
-        {gameState === 'go' && (
-          <button
-            onClick={handleTap}
-            disabled={hasTappedThisRound}
-            className={`w-full h-80 rounded-modal border-4 flex flex-col items-center justify-center cursor-pointer shadow-2xl transition-transform ${
-              hasTappedThisRound
-                ? 'bg-surface border-line'
-                : 'bg-[#2EE37D] text-[#1E1B3A] border-[#2EE37D] active:scale-95'
-            }`}
-          >
-            {hasTappedThisRound ? (
-              <div className="text-center space-y-2">
-                <span className="text-5xl font-black font-heading text-success">
-                  {reactionTime} ms
-                </span>
-                <p className="text-xs text-text-muted">Recorded! Waiting for other players…</p>
-              </div>
-            ) : (
-              <>
-                <span className="text-6xl sm:text-7xl font-heading font-black tracking-widest animate-bounce">
-                  TAP NOW!
-                </span>
-                <span className="text-sm font-bold mt-2">GO GO GO!</span>
-              </>
-            )}
-          </button>
+        {isGo && !isTargetRound && (
+          <div className="text-center space-y-2 pointer-events-none animate-ping-once">
+            <h2 className="text-5xl md:text-7xl font-black font-heading text-ink tracking-tight">
+              TAP NOW!
+            </h2>
+            <p className="text-lg font-black font-heading text-ink/80">GO GO GO!</p>
+          </div>
         )}
 
-        {/* State: Round Results (Synchronized for all players) */}
-        {gameState === 'round_result' && (
-          <div className="w-full max-w-lg bg-surface p-6 rounded-card border-2 border-line shadow-xl space-y-4">
-            <h3 className="font-heading font-bold text-lg text-text text-center">
-              Round {currentRound} Standings
+        {/* Target Round Target Circle */}
+        {isGo && isTargetRound && (
+          <div
+            onClick={handleTargetClick}
+            style={{ left: `${targetPos.x}%`, top: `${targetPos.y}%` }}
+            className={`absolute -translate-x-1/2 -translate-y-1/2 w-24 h-24 rounded-full bg-primary border-4 border-ink flex items-center justify-center cursor-pointer shadow-tile active:scale-95 transition-transform ${
+              shakeTarget ? 'animate-shake' : ''
+            }`}
+          >
+            <Crosshair className="w-12 h-12 text-ink animate-spin-slow" />
+          </div>
+        )}
+
+        {isResult && (
+          <div className="text-center space-y-3">
+            <span className="text-xs font-black uppercase tracking-widest text-primary">Round Results</span>
+            <h3 className="text-3xl md:text-4xl font-black font-heading text-text">
+              {isFalseStart ? (
+                <span className="text-danger flex items-center justify-center gap-2">
+                  <AlertTriangle className="w-8 h-8" /> False Start (+0 pts)
+                </span>
+              ) : reactionTime ? (
+                <span className="text-success flex items-center justify-center gap-2">
+                  ⚡ {reactionTime} ms!
+                </span>
+              ) : (
+                <span className="text-text-muted">No Tap (+0 pts)</span>
+              )}
             </h3>
-
-            <div className="space-y-2">
-              {roundTaps
-                .sort((a, b) => (b.score || 0) - (a.score || 0))
-                .map((res, i) => {
-                  const player = players.find((p) => p.user_id === res.userId);
-                  const isMe = res.userId === userId;
-
-                  return (
-                    <div
-                      key={res.userId}
-                      className={`flex items-center justify-between p-3 rounded-xl border ${
-                        isMe ? 'bg-primary/10 border-primary' : 'bg-surface-raised border-line'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <span className="font-heading font-bold text-sm text-text-muted w-4">
-                          #{i + 1}
-                        </span>
-                        <Avatar
-                          avatarId={player?.profile?.avatar_id || 'avatar-01'}
-                          name={player?.profile?.display_name || 'Player'}
-                          size="sm"
-                        />
-                        <span className="font-semibold text-sm text-text">
-                          {player?.profile?.display_name || 'Player'}
-                          {isMe && <span className="text-xs text-primary ml-1">(You)</span>}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <span className="font-mono text-xs text-text-muted">
-                          {res.isFalseStart ? 'False Start' : `${res.timeMs} ms`}
-                        </span>
-                        <span className="font-heading font-bold text-sm text-primary">
-                          +{res.score} pts
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-            </div>
-
-            {isHost ? (
-              <Button variant="primary" fullWidth onClick={handleNextRoundOrFinish} className="mt-4">
-                {currentRound >= totalRounds ? 'View Final Podium' : 'Next Round →'}
-              </Button>
-            ) : (
-              <div className="text-center text-xs text-text-muted p-2">
-                Waiting for host to proceed to {currentRound >= totalRounds ? 'Podium' : 'Next Round'}…
-              </div>
-            )}
           </div>
         )}
       </div>
 
-      {/* Footer Info */}
-      <div className="text-center text-xs text-text-muted">
-        <span>Hardware timestamping active • Zero-lag local measurement (REA-2)</span>
-      </div>
+      {/* Round Result Ranks List */}
+      {isResult && roundTaps.length > 0 && (
+        <div className="tile p-4 space-y-2.5 bg-surface-raised animate-fade">
+          <span className="text-xs font-black uppercase tracking-wider text-text-muted">
+            Round {roundNo} Standings
+          </span>
+          <div className="space-y-1.5">
+            {roundTaps
+              .sort((a, b) => (a.timeMs || 99999) - (b.timeMs || 99999))
+              .map((t, idx) => {
+                const player = players.find((p) => p.user_id === t.userId);
+                return (
+                  <div
+                    key={t.userId}
+                    className="flex items-center justify-between p-2 rounded-[10px] bg-surface border border-line text-xs font-bold font-heading"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="w-5 text-center text-text-muted">#{idx + 1}</span>
+                      <Avatar avatarId={player?.profile?.avatar_id || 'avatar-01'} name={player?.profile?.display_name} size="sm" />
+                      <span className="text-text">{player?.profile?.display_name || 'Player'}</span>
+                    </div>
+
+                    <span className={t.isFalseStart ? 'text-danger' : 'text-primary font-black tabular-nums'}>
+                      {t.isFalseStart ? 'Too early' : `${t.timeMs} ms`}
+                    </span>
+                  </div>
+                );
+              })}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -209,6 +209,41 @@ class SoundEngine {
     });
   }
 
+  /**
+   * Elimination heavy thud sound for Word Chain Blitz / Reaction Duel
+   */
+  public playElimination(): void {
+    if (this.isMuted) return;
+    this.vibrate([80, 50, 120]);
+    const ctx = this.initContext();
+    if (!ctx) return;
+    if (ctx.state === 'suspended') ctx.resume();
+
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(110, now);
+    osc.frequency.exponentialRampToValueAtTime(30, now + 0.35);
+
+    gain.gain.setValueAtTime(0.35 * this.volume, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc.start(now);
+    osc.stop(now + 0.36);
+  }
+
+  /**
+   * Cheerful round completion fanfare / applause
+   */
+  public playApplause(): void {
+    this.playFanfare();
+  }
+
   private vibrate(pattern: number | number[]): void {
     if (typeof window !== 'undefined' && 'vibrate' in navigator) {
       try {

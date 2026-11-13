@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Avatar } from '@/components/ui/Avatar';
-import { Button } from '@/components/ui/Button';
 import { sound } from '@/lib/sound';
+import { timeSync } from '@/lib/time-sync';
 import { computeTypingScore, computeTypingWPM } from '@/lib/scoring';
-import { SEED_TYPING } from '@/data/seed-content';
+import { SEED_TYPING, TypingSeedItem } from '@/data/seed-content';
 import type { Room, RoomPlayer, Profile } from '@/types/database';
-import { Flag, Trophy } from 'lucide-react';
+import { Flag, Clock, AlertTriangle } from 'lucide-react';
 
 interface PlayerWithProfile extends RoomPlayer {
   profile?: Profile;
@@ -25,54 +25,116 @@ interface PlayerProgress {
   progressPct: number;
   wpm: number;
   isFinished: boolean;
+  timeMs?: number;
 }
 
 export const TypingRace: React.FC<TypingRaceProps> = ({
   room,
   players,
   userId,
-  isHost,
   onFinishGame,
 }) => {
-  // Passage selection
-  const [passage] = useState<string>(() => {
-    const randomIndex = Math.floor(Math.random() * SEED_TYPING.length);
-    return SEED_TYPING[randomIndex].text;
+  const gameState = room.game_state || {};
+  const roundNo = Math.max(1, (gameState.round as number) || 1);
+  const totalRounds = Math.max(1, (gameState.totalRounds as number) || 3);
+
+  // Content selection with increasing difficulty across rounds (diff 1 -> 2 -> 3)
+  const [passages] = useState<TypingSeedItem[]>(() => {
+    const diff1 = SEED_TYPING.filter((t) => t.difficulty === 1);
+    const diff2 = SEED_TYPING.filter((t) => t.difficulty === 2);
+    const diff3 = SEED_TYPING.filter((t) => t.difficulty === 3);
+
+    return [
+      diff1[0] || SEED_TYPING[0],
+      diff2[0] || SEED_TYPING[1] || SEED_TYPING[0],
+      diff3[0] || SEED_TYPING[2] || SEED_TYPING[0],
+      diff3[1] || SEED_TYPING[3] || SEED_TYPING[0],
+      diff3[2] || SEED_TYPING[4] || SEED_TYPING[0],
+    ];
   });
+
+  const currentPassageItem = passages[roundNo - 1] || passages[0];
+  const passageText = currentPassageItem.text;
+
+  const phase = room.phase || 'typing';
+  const isIntro = phase === 'intro';
+  const isTyping = phase === 'typing';
+  const isResult = phase === 'result';
 
   const [input, setInput] = useState('');
   const [totalKeystrokes, setTotalKeystrokes] = useState(0);
   const [correctKeystrokes, setCorrectKeystrokes] = useState(0);
-  const [startTime, setStartTime] = useState<number | null>(null);
   const [isFinished, setIsFinished] = useState(false);
   const [wpm, setWpm] = useState(0);
   const [accuracy, setAccuracy] = useState(1);
+  const [finishTimeSec, setFinishTimeSec] = useState<number | null>(null);
   const [allProgress, setAllProgress] = useState<{ [uid: string]: PlayerProgress }>({});
-  const [rankings, setRankings] = useState<{ userId: string; score: number; wpm: number; accuracy: number }[]>([]);
+  const [firstFinisherUserId, setFirstFinisherUserId] = useState<string | null>(null);
+  const [isLastCall, setIsLastCall] = useState(false);
+  const [remainingSecs, setRemainingSecs] = useState(75);
+  const [cumulativeScores, setCumulativeScores] = useState<{ [uid: string]: number }>({});
+  const [roundPoints, setRoundPoints] = useState(0);
 
   const inputRef = useRef<HTMLInputElement>(null);
-  const lastBroadcastTimeRef = useRef<number>(0);
+  const raceStartRef = useRef<number>(Date.now());
+  const lastBroadcastRef = useRef<number>(0);
 
-  // Focus input automatically
+  // Reset state on round advance
   useEffect(() => {
-    inputRef.current?.focus();
-    setStartTime(Date.now());
-  }, []);
+    setInput('');
+    setTotalKeystrokes(0);
+    setCorrectKeystrokes(0);
+    setIsFinished(false);
+    setWpm(0);
+    setAccuracy(1);
+    setFinishTimeSec(null);
+    setFirstFinisherUserId(null);
+    setIsLastCall(false);
+    setRoundPoints(0);
+    setAllProgress({});
+    raceStartRef.current = timeSync.correctedNow();
+    if (isTyping) {
+      inputRef.current?.focus();
+    }
+  }, [roundNo]);
 
-  // Broadcast throttled progress (TYP-4, TM-13: max 4 per second)
-  const broadcastProgress = useCallback(
-    async (progressPct: number, currentWpm: number, finished: boolean) => {
-      const now = Date.now();
-      if (now - lastBroadcastTimeRef.current < 250 && !finished) {
-        return;
+  // Synchronized timer and TYP-4 Last Call logic
+  useEffect(() => {
+    if (!room.phase_ends_at || isIntro) {
+      setRemainingSecs(75);
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      const endsAtMs = new Date(room.phase_ends_at!).getTime();
+      let left = Math.max(0, Math.ceil((endsAtMs - Date.now()) / 1000));
+
+      if (isLastCall) {
+        left = Math.min(left, 20);
       }
-      lastBroadcastTimeRef.current = now;
+
+      setRemainingSecs(left);
+      if (left <= 5 && left > 0 && isTyping) {
+        sound.playTick();
+      }
+    }, 500);
+
+    return () => clearInterval(interval);
+  }, [room.phase_ends_at, isIntro, isTyping, isLastCall]);
+
+  // Broadcast throttled progress (TYP-5: at most 4 times per second)
+  const broadcastProgress = useCallback(
+    async (progressPct: number, currentWpm: number, finished: boolean, timeSec?: number) => {
+      const now = Date.now();
+      if (now - lastBroadcastRef.current < 250 && !finished) return;
+      lastBroadcastRef.current = now;
 
       const payload: PlayerProgress = {
         userId,
         progressPct,
         wpm: currentWpm,
         isFinished: finished,
+        timeMs: timeSec ? Math.round(timeSec * 1000) : undefined,
       };
 
       const channel = supabase.channel(`typing:${room.id}`);
@@ -85,7 +147,7 @@ export const TypingRace: React.FC<TypingRaceProps> = ({
     [room.id, userId]
   );
 
-  // Subscribe to all players' race progress
+  // Realtime subscription for race lanes and first finisher last-call
   useEffect(() => {
     const channel = supabase.channel(`typing:${room.id}`, {
       config: { broadcast: { self: true } },
@@ -97,142 +159,203 @@ export const TypingRace: React.FC<TypingRaceProps> = ({
           ...prev,
           [payload.userId]: payload,
         }));
-      })
-      .on('broadcast', { event: 'race_finished' }, ({ payload }) => {
-        onFinishGame(payload.finalScores);
+
+        // TYP-4: Trigger last call when the first player finishes
+        if (payload.isFinished && !firstFinisherUserId) {
+          setFirstFinisherUserId(payload.userId);
+          setIsLastCall(true);
+        }
       })
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [room.id]);
+  }, [room.id, firstFinisherUserId]);
 
+  // Handle keystroke input with TYP-2 & TYP-3 anti-cheat
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (isFinished) return;
+    if (isFinished || !isTyping) return;
 
     const val = e.target.value;
-    // Allow typing only up to passage length
-    if (val.length > passage.length) return;
+    if (val.length > passageText.length) return;
 
     setTotalKeystrokes((prev) => prev + 1);
 
-    // Keystroke match validation
-    const lastChar = val[val.length - 1];
-    const expectedChar = passage[val.length - 1];
-    if (lastChar === expectedChar) {
+    const charIndex = val.length - 1;
+    if (charIndex >= 0 && val[charIndex] === passageText[charIndex]) {
       setCorrectKeystrokes((prev) => prev + 1);
     }
 
     setInput(val);
 
-    // Compute progress
+    // Strict sequential matching
     let correctCount = 0;
     for (let i = 0; i < val.length; i++) {
-      if (val[i] === passage[i]) correctCount++;
-      else break; // strict sequential matching
+      if (val[i] === passageText[i]) correctCount++;
+      else break;
     }
 
-    const elapsedSeconds = startTime ? Math.max(1, (Date.now() - startTime) / 1000) : 1;
+    const elapsedSeconds = Math.max(0.5, (timeSync.correctedNow() - raceStartRef.current) / 1000);
     const currentWpm = computeTypingWPM(correctCount, elapsedSeconds);
-    const progressPct = Math.round((correctCount / passage.length) * 100);
-
-    setWpm(currentWpm);
+    const progressPct = Math.round((correctCount / passageText.length) * 100);
 
     const currentAccuracy = totalKeystrokes > 0 ? (correctKeystrokes + 1) / (totalKeystrokes + 1) : 1;
+    setWpm(currentWpm);
     setAccuracy(currentAccuracy);
 
-    // Finish condition: exact match of entire passage (TYP-2)
-    if (val === passage) {
+    // TYP-2 Finish Condition: exact match of entire passage
+    if (val === passageText) {
       setIsFinished(true);
+      setFinishTimeSec(elapsedSeconds);
       sound.playFanfare();
-      broadcastProgress(100, currentWpm, true);
+      broadcastProgress(100, currentWpm, true, elapsedSeconds);
+
+      // Call authoritative server RPC (TYP-6)
+      void (async () => {
+        try {
+          await supabase.rpc('submit_typing_result', {
+            p_room_id: room.id,
+            p_round_no: roundNo,
+            p_payload: {
+              chars_typed: val.length,
+              wpm: currentWpm,
+              accuracy: currentAccuracy,
+              finished: true,
+              elapsed_s: elapsedSeconds,
+            },
+          });
+        } catch {
+          // ignore
+        }
+      })();
     } else {
       broadcastProgress(progressPct, currentWpm, false);
     }
   };
 
-  // Evaluate final standings
-  useEffect(() => {
-    const finishedPlayers = Object.values(allProgress).filter((p) => p.isFinished);
-    if (finishedPlayers.length > 0 && finishedPlayers.length === players.length) {
-      // All players finished!
-      const ranked = Object.values(allProgress)
-        .sort((a, b) => (b.wpm || 0) - (a.wpm || 0))
-        .map((p, idx) => {
-          const score = computeTypingScore(idx + 1, p.isFinished, p.progressPct, accuracy);
-          return {
-            userId: p.userId,
-            score,
-            wpm: p.wpm,
-            accuracy: Math.round(accuracy * 100),
-          };
-        });
-      setRankings(ranked);
-    }
-  }, [allProgress, players.length, accuracy]);
-
-  const handleFinish = async () => {
-    const scoresMap: { [uid: string]: number } = {};
-    rankings.forEach((r) => {
-      scoresMap[r.userId] = r.score;
-    });
-
-    const channel = supabase.channel(`typing:${room.id}`);
-    await channel.send({
-      type: 'broadcast',
-      event: 'race_finished',
-      payload: { finalScores: scoresMap },
-    });
-
-    onFinishGame(scoresMap);
+  // TYP-3: Block paste, drag, drop
+  const handlePreventAction = (e: React.SyntheticEvent) => {
+    e.preventDefault();
   };
 
+  // Evaluate Round Result on Result Phase
+  useEffect(() => {
+    if (!isResult) return;
+
+    // Rank finished players by WPM descending
+    const finishers = Object.values(allProgress)
+      .filter((p) => p.isFinished)
+      .sort((a, b) => (b.wpm || 0) - (a.wpm || 0));
+
+    const rankIndex = finishers.findIndex((p) => p.userId === userId);
+    const myRank = rankIndex !== -1 ? rankIndex + 1 : 5;
+
+    let pts = computeTypingScore(myRank, isFinished, Math.round((input.length / passageText.length) * 100), accuracy);
+    if (roundNo >= 3) {
+      pts = Math.round(pts * 1.2); // Round 3+ worth x1.2
+    }
+
+    setRoundPoints(pts);
+
+    setCumulativeScores((prev) => {
+      const updated = { ...prev, [userId]: (prev[userId] || 0) + pts };
+      if (roundNo >= totalRounds) {
+        onFinishGame(updated);
+      }
+      return updated;
+    });
+  }, [isResult]);
+
   return (
-    <div className="flex-1 flex flex-col justify-between max-w-4xl mx-auto w-full py-4 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between pb-3 border-b border-line">
-        <div className="flex items-center gap-2">
-          <Flag className="w-5 h-5 text-game-typing" />
-          <span className="font-heading font-bold text-lg text-text">Typing Race</span>
+    <div className="flex-1 flex flex-col justify-between max-w-4xl mx-auto w-full py-4 space-y-6 select-none animate-fade">
+      {/* Header Banner */}
+      <div className="w-full flex items-center justify-between p-3.5 rounded-card bg-surface border-2 border-line shadow-tile">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-[10px] bg-game-typing text-ink flex items-center justify-center font-bold shadow-sm">
+            <Flag className="w-5 h-5" />
+          </div>
+          <div>
+            <span className="font-heading font-black text-sm md:text-base text-text flex items-center gap-2">
+              Round {roundNo} of {totalRounds} • {currentPassageItem.category}
+              {roundNo >= 3 && (
+                <span className="px-2 py-0.5 rounded-[6px] bg-warn text-ink text-[11px] font-black uppercase tracking-wider">
+                  ⚡ 1.2x Multiplier
+                </span>
+              )}
+            </span>
+            <span className="text-xs text-text-muted capitalize">
+              Difficulty Tier {currentPassageItem.difficulty}
+            </span>
+          </div>
         </div>
-        <div className="flex items-center gap-4 text-xs font-heading font-bold">
-          <span className="text-primary">{wpm} WPM</span>
-          <span className="text-success">{Math.round(accuracy * 100)}% Accuracy</span>
+
+        <div className="flex items-center gap-4 text-xs font-heading font-black">
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-[10px] bg-surface-raised border border-line shadow-tile-sm">
+            <span className="text-primary tabular-nums">{wpm} WPM</span>
+            <span className="text-line">•</span>
+            <span className="text-success tabular-nums">{Math.round(accuracy * 100)}% Acc</span>
+          </div>
+
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-[10px] bg-surface-raised border border-line text-xs font-heading font-black shadow-tile-sm">
+            <Clock className="w-3.5 h-3.5 text-warn" />
+            <span className={`tabular-nums ${remainingSecs <= 10 ? 'text-danger animate-pulse font-black' : 'text-text'}`}>
+              {remainingSecs}s
+            </span>
+          </div>
         </div>
       </div>
 
-      {/* Live Race Lanes (TYP-4) */}
-      <div className="bg-surface p-4 rounded-card border-2 border-line space-y-3 shadow-lg">
-        <span className="text-xs uppercase font-bold text-text-muted flex items-center justify-between">
+      {/* TYP-4: Last Call Notification */}
+      {isLastCall && !isFinished && (
+        <div className="p-3 rounded-[12px] bg-warn/15 border-2 border-warn text-warn text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 animate-bounce">
+          <AlertTriangle className="w-4 h-4" />
+          <span>Last Call! A player has crossed the finish line — 20 seconds remaining!</span>
+        </div>
+      )}
+
+      {/* TYP-5: Live Race Lanes */}
+      <div className="tile p-4 space-y-2.5">
+        <span className="text-xs font-black uppercase tracking-wider text-text-muted flex items-center justify-between">
           <span>Race Track</span>
           <span>Finish 🏁</span>
         </span>
 
         <div className="space-y-2">
           {players.map((p) => {
-            const progress = allProgress[p.user_id]?.progressPct || (p.user_id === userId ? Math.round((input.length / passage.length) * 100) : 0);
-            const isPlayerFinished = allProgress[p.user_id]?.isFinished;
+            const prog = allProgress[p.user_id]?.progressPct || (p.user_id === userId ? Math.round((input.length / passageText.length) * 100) : 0);
+            const isFin = allProgress[p.user_id]?.isFinished;
+            const isMe = p.user_id === userId;
 
             return (
-              <div key={p.user_id} className="relative h-10 bg-surface-raised rounded-full border border-line flex items-center px-2 overflow-hidden">
+              <div
+                key={p.user_id}
+                className="relative h-11 bg-surface-raised rounded-[12px] border-2 border-line flex items-center px-2 overflow-hidden shadow-sm"
+              >
+                {/* Progress bar fill */}
                 <div
-                  className="absolute left-0 top-0 bottom-0 bg-primary/20 transition-all duration-300 rounded-full"
-                  style={{ width: `${progress}%` }}
+                  className="absolute left-0 top-0 bottom-0 bg-game-typing/20 transition-all duration-200 border-r-2 border-game-typing"
+                  style={{ width: `${Math.max(4, Math.min(100, prog))}%` }}
                 />
 
-                <div
-                  className="relative z-10 flex items-center gap-2 transition-all duration-300"
-                  style={{ left: `calc(${Math.min(92, progress)}% - 10px)` }}
-                >
-                  <Avatar
-                    avatarId={p.profile?.avatar_id || 'avatar-01'}
-                    name={p.profile?.display_name || 'Player'}
-                    size="sm"
-                  />
-                  {isPlayerFinished && (
-                    <span className="text-xs font-bold text-warn">🏁</span>
-                  )}
+                <div className="relative z-10 flex items-center justify-between w-full">
+                  <div className="flex items-center gap-2">
+                    <Avatar avatarId={p.profile?.avatar_id || 'avatar-01'} name={p.profile?.display_name} size="sm" />
+                    <span className="font-heading font-bold text-xs text-text truncate max-w-[120px]">
+                      {p.profile?.display_name || 'Player'} {isMe && '(You)'}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2 text-xs font-black">
+                    <span className="text-primary tabular-nums">
+                      {allProgress[p.user_id]?.wpm || (isMe ? wpm : 0)} WPM
+                    </span>
+                    {isFin && (
+                      <span className="px-1.5 py-0.5 rounded bg-success text-ink font-black text-[10px]">
+                        Finished 🏁
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             );
@@ -240,71 +363,83 @@ export const TypingRace: React.FC<TypingRaceProps> = ({
         </div>
       </div>
 
-      {/* Passage Display with Atkinson Hyperlegible Font (TYP-1, TYP-2) */}
-      <div className="bg-surface p-6 rounded-card border-2 border-line space-y-4 shadow-xl">
-        <div className="font-typing text-xl md:text-2xl leading-relaxed tracking-wide select-none p-2 bg-bg/40 rounded-xl">
-          {passage.split('').map((char, index) => {
-            let color = 'text-text-muted/60';
-            let isUnderlined = false;
-
-            if (index < input.length) {
-              if (input[index] === char) {
-                color = 'text-success font-semibold';
-              } else {
-                color = 'text-danger bg-danger/20 font-bold';
-                isUnderlined = true;
-              }
-            }
-
-            const isCaret = index === input.length && !isFinished;
-
-            return (
-              <span
-                key={index}
-                className={`${color} ${isUnderlined ? 'underline decoration-danger decoration-2' : ''} ${
-                  isCaret ? 'border-b-4 border-primary animate-pulse' : ''
-                }`}
-              >
-                {char}
-              </span>
-            );
-          })}
-        </div>
-
-        {/* Input Guard (TYP-3) */}
-        {!isFinished ? (
-          <input
-            ref={inputRef}
-            type="text"
-            value={input}
-            onChange={handleInputChange}
-            onPaste={(e) => e.preventDefault()}
-            onDrop={(e) => e.preventDefault()}
-            autoComplete="off"
-            autoCapitalize="off"
-            autoCorrect="off"
-            spellCheck={false}
-            placeholder="Type the passage above accurately…"
-            className="w-full px-4 py-3 rounded-input bg-surface-raised text-text border-2 border-line font-typing text-lg focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
-          />
-        ) : (
-          <div className="p-4 rounded-xl bg-success/20 border-2 border-success text-center">
-            <span className="font-heading font-black text-2xl text-success flex items-center justify-center gap-2">
-              <Trophy className="w-6 h-6" /> Finished! {wpm} WPM • {Math.round(accuracy * 100)}% Accuracy
-            </span>
+      {/* Typing Area (Atkinson Hyperlegible, 22px+, line-height 1.8) */}
+      <div
+        className="tile p-6 md:p-8 relative min-h-[160px] cursor-text"
+        onClick={() => inputRef.current?.focus()}
+      >
+        {isIntro ? (
+          <div className="py-10 flex flex-col items-center justify-center text-center space-y-2">
+            <span className="text-xs font-black uppercase tracking-widest text-primary">Get Ready</span>
+            <p className="text-lg font-heading font-bold text-text-muted blur-sm select-none">
+              The race passage will reveal the instant the countdown expires...
+            </p>
           </div>
+        ) : (
+          <>
+            <div className="font-typing text-xl md:text-2xl leading-[1.8] tracking-wide select-none">
+              {passageText.split('').map((char, idx) => {
+                const typedChar = input[idx];
+                const isTyped = idx < input.length;
+                const isCurrent = idx === input.length;
+                const isMatch = typedChar === char;
+
+                let charStyle = 'text-text-muted/60';
+                if (isTyped) {
+                  charStyle = isMatch ? 'text-success font-bold' : 'text-danger underline font-bold bg-danger/10';
+                }
+
+                return (
+                  <span
+                    key={idx}
+                    className={`${charStyle} ${isCurrent ? 'bg-primary/30 border-b-2 border-primary animate-pulse' : ''}`}
+                  >
+                    {char}
+                  </span>
+                );
+              })}
+            </div>
+
+            {/* Hidden Input capturing typing events with TYP-3 anti-cheat */}
+            <input
+              ref={inputRef}
+              type="text"
+              value={input}
+              onChange={handleInputChange}
+              onPaste={handlePreventAction}
+              onDrop={handlePreventAction}
+              onDragOver={handlePreventAction}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              disabled={isFinished || !isTyping}
+              className="absolute inset-0 opacity-0 cursor-default"
+              autoFocus
+            />
+
+            {isFinished && (
+              <div className="mt-4 p-3 rounded-[12px] bg-success/20 border-2 border-success text-success text-center font-heading font-black text-sm animate-fade">
+                🎉 Finished! Completed in {finishTimeSec?.toFixed(1)}s with {wpm} WPM and {Math.round(accuracy * 100)}% accuracy!
+              </div>
+            )}
+          </>
         )}
       </div>
 
-      {/* Host Controls */}
-      {isHost && (
-        <div className="flex justify-end">
-          <Button variant="primary" onClick={handleFinish}>
-            End Race & View Podium
-          </Button>
+      {/* Result Phase Score Card */}
+      {isResult && (
+        <div className="tile p-4 bg-surface-raised space-y-2 animate-fade">
+          <div className="flex items-center justify-between text-sm font-bold">
+            <span className="text-success font-heading font-black">
+              +{roundPoints} Round Points Awarded!
+            </span>
+            <span className="text-text-muted text-xs">
+              Cumulative: {cumulativeScores[userId] || 0} pts
+            </span>
+          </div>
         </div>
       )}
     </div>
   );
 };
-

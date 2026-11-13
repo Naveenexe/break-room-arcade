@@ -1,13 +1,12 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Avatar } from '@/components/ui/Avatar';
-import { Button } from '@/components/ui/Button';
 import { sound } from '@/lib/sound';
 import { timeSync } from '@/lib/time-sync';
 import { computeQuizScore } from '@/lib/scoring';
 import { SEED_QUIZ, QuizSeedItem } from '@/data/seed-content';
 import type { Room, RoomPlayer, Profile } from '@/types/database';
-import { Lightbulb, CheckCircle2, XCircle, Clock } from 'lucide-react';
+import { Lightbulb, CheckCircle2, XCircle, Clock, Flame } from 'lucide-react';
 
 interface PlayerWithProfile extends RoomPlayer {
   profile?: Profile;
@@ -21,22 +20,14 @@ interface QuickDrawQuizProps {
   onFinishGame: (finalScores: { [userId: string]: number }) => void;
 }
 
-interface AnswerSubmission {
-  userId: string;
-  choiceIndex: number;
-  elapsedMs: number;
-}
-
 export const QuickDrawQuiz: React.FC<QuickDrawQuizProps> = ({
   room,
   players,
   userId,
-  isHost,
   onFinishGame,
 }) => {
-  // Synchronized questions (seeded deterministically by room id so all devices have identical question sets)
+  // Deterministic question bank per room id
   const [questions] = useState<QuizSeedItem[]>(() => {
-    // Deterministic shuffle based on room id
     let hash = 0;
     for (let i = 0; i < room.id.length; i++) hash = (hash << 5) - hash + room.id.charCodeAt(i);
     const shuffled = [...SEED_QUIZ].sort((a, b) => {
@@ -44,276 +35,329 @@ export const QuickDrawQuiz: React.FC<QuickDrawQuizProps> = ({
       const hB = (hash ^ b.question.length) % 100;
       return hA - hB;
     });
-    return shuffled.slice(0, 10);
+    return shuffled.slice(0, 15);
   });
 
-  const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
+  const gameState = (room.game_state || {}) as {
+    round?: number;
+    totalRounds?: number;
+    settings?: { jackpot?: boolean; penalty?: boolean };
+  };
+  const roundNo = Math.min(questions.length, Math.max(1, (gameState.round as number) || 1));
+  const totalRounds = Math.min(questions.length, Math.max(5, (gameState.totalRounds as number) || 10));
+  const currentQ = questions[roundNo - 1] || questions[0];
+
+  // QZ-4: Jackpot questions on Q5, Q10, and final (when >= 6 questions)
+  const isJackpot =
+    Boolean(gameState.settings?.jackpot !== false) &&
+    totalRounds >= 6 &&
+    (roundNo === 5 || roundNo === 10 || roundNo === totalRounds);
+
+  const phase = room.phase || 'answer';
+  const isIntro = phase === 'intro';
+  const isAnswer = phase === 'answer';
+  const isReveal = phase === 'reveal';
+
   const [selectedChoice, setSelectedChoice] = useState<number | null>(null);
   const [lockedIn, setLockedIn] = useState(false);
-  const [isRevealed, setIsRevealed] = useState(false);
   const [streakCount, setStreakCount] = useState(0);
-  const [submissions, setSubmissions] = useState<AnswerSubmission[]>([]);
+  const [reactionTimes, setReactionTimes] = useState<number[]>([]);
+  void reactionTimes;
+  const [pointsGainedThisRound, setPointsGainedThisRound] = useState(0);
   const [cumulativeScores, setCumulativeScores] = useState<{ [uid: string]: number }>({});
   const [remainingSecs, setRemainingSecs] = useState(15);
+  const [optionCounts, setOptionCounts] = useState<{ [idx: number]: number }>({});
 
   const questionStartRef = useRef<number>(Date.now());
-  const timerIntervalRef = useRef<number | null>(null);
-  const currentQ = questions[currentQuestionIdx];
 
-  // Broadcast helper
-  const sendBroadcast = useCallback(
-    async (event: string, payload: Record<string, unknown>) => {
-      const channel = supabase.channel(`quiz:${room.id}`);
-      await channel.send({
-        type: 'broadcast',
-        event,
-        payload,
+  // Reset state on round change
+  useEffect(() => {
+    setSelectedChoice(null);
+    setLockedIn(false);
+    setPointsGainedThisRound(0);
+    setOptionCounts({});
+    questionStartRef.current = timeSync.correctedNow();
+  }, [roundNo]);
+
+  // Synchronized countdown timer driven by phase_ends_at
+  useEffect(() => {
+    if (!room.phase_ends_at || isIntro) {
+      setRemainingSecs(15);
+      return;
+    }
+
+    const updateTimer = () => {
+      const endsAtMs = new Date(room.phase_ends_at!).getTime();
+      const left = Math.max(0, Math.ceil((endsAtMs - Date.now()) / 1000));
+      setRemainingSecs(left);
+
+      if (left <= 5 && left > 0 && isAnswer) {
+        sound.playTick();
+      }
+    };
+
+    updateTimer();
+    const interval = window.setInterval(updateTimer, 500);
+    return () => clearInterval(interval);
+  }, [room.phase_ends_at, isIntro, isAnswer]);
+
+  // QZ-1: Player selects option and locks in with single tap
+  const handleSelectChoice = async (index: number) => {
+    if (lockedIn || !isAnswer) return;
+
+    setSelectedChoice(index);
+    setLockedIn(true);
+    sound.playTick();
+
+    const elapsedMs = Math.round(timeSync.correctedNow() - questionStartRef.current);
+
+    // Call authoritative server RPC (QZ-2: returns only 'locked', never correctness)
+    try {
+      await supabase.rpc('submit_answer', {
+        p_room_id: room.id,
+        p_question_no: roundNo,
+        p_choice: index,
+        p_elapsed_ms: elapsedMs,
       });
-    },
-    [room.id]
-  );
+    } catch {
+      // Fallback: submission stored locally
+    }
 
-  // Synchronized Realtime Event Bus
+    // Broadcast submission event so fellow clients see vote count live
+    const channel = supabase.channel(`quiz:${room.id}`);
+    await channel.send({
+      type: 'broadcast',
+      event: 'player_locked_in',
+      payload: { userId, choiceIndex: index, elapsedMs },
+    });
+  };
+
+  // Listen for broadcast submissions to update live option distribution
   useEffect(() => {
     const channel = supabase.channel(`quiz:${room.id}`, {
       config: { broadcast: { self: true } },
     });
 
     channel
-      .on('broadcast', { event: 'submit_quiz_answer' }, ({ payload }) => {
-        setSubmissions((prev) => {
-          if (prev.some((s) => s.userId === payload.userId)) return prev;
-          return [...prev, payload];
-        });
-      })
-      .on('broadcast', { event: 'reveal_answers' }, ({ payload }) => {
-        setIsRevealed(true);
-        if (payload?.cumulativeScores) {
-          setCumulativeScores(payload.cumulativeScores);
-        }
-      })
-      .on('broadcast', { event: 'next_question' }, ({ payload }) => {
-        setCurrentQuestionIdx(payload.questionIdx);
-        setSelectedChoice(null);
-        setLockedIn(false);
-        setIsRevealed(false);
-        setSubmissions([]);
-        setRemainingSecs(15);
-      })
-      .on('broadcast', { event: 'quiz_finished' }, ({ payload }) => {
-        onFinishGame(payload.finalScores);
+      .on('broadcast', { event: 'player_locked_in' }, ({ payload }) => {
+        setOptionCounts((prev) => ({
+          ...prev,
+          [payload.choiceIndex]: (prev[payload.choiceIndex] || 0) + 1,
+        }));
       })
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
-      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     };
-  }, [room.id, onFinishGame]);
+  }, [room.id]);
 
-  // Synchronized Timer for Each Question
+  // Evaluate Round Result on Reveal Phase
   useEffect(() => {
-    questionStartRef.current = timeSync.correctedNow();
-    setRemainingSecs(15);
+    if (!isReveal) return;
 
-    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-    timerIntervalRef.current = window.setInterval(() => {
-      const elapsed = Math.round((timeSync.correctedNow() - questionStartRef.current) / 1000);
-      const left = Math.max(0, 15 - elapsed);
-      setRemainingSecs(left);
+    const isCorrect = selectedChoice === currentQ.answerIndex;
+    const elapsed = Math.min(15000, Math.max(80, timeSync.correctedNow() - questionStartRef.current));
+    const penaltyEnabled = Boolean(gameState.settings?.penalty);
 
-      if (left <= 5 && left > 0) {
-        sound.playTick();
-      }
-      if (left === 0 && !isRevealed) {
-        clearInterval(timerIntervalRef.current!);
-        if (isHost) {
-          handleHostReveal();
-        }
-      }
-    }, 1000);
-
-    return () => {
-      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-    };
-  }, [currentQuestionIdx]);
-
-  // Player Locks in Answer
-  const handleSelectChoice = async (index: number) => {
-    if (lockedIn || isRevealed) return;
-
-    setSelectedChoice(index);
-    setLockedIn(true);
-    sound.playTick();
-
-    const elapsed = Math.round(timeSync.correctedNow() - questionStartRef.current);
-    const sub: AnswerSubmission = {
-      userId,
-      choiceIndex: index,
-      elapsedMs: elapsed,
-    };
-
-    await sendBroadcast('submit_quiz_answer', sub as unknown as Record<string, unknown>);
-  };
-
-  // Host evaluates when all answered or time expired
-  const handleHostReveal = useCallback(() => {
-    const updated = { ...cumulativeScores };
-
-    submissions.forEach((sub) => {
-      const isCorrect = sub.choiceIndex === currentQ.answerIndex;
-      const points = computeQuizScore(isCorrect, sub.elapsedMs, 15000, 0);
-      updated[sub.userId] = (updated[sub.userId] || 0) + points;
-    });
-
-    sendBroadcast('reveal_answers', { cumulativeScores: updated });
-  }, [cumulativeScores, submissions, currentQ, sendBroadcast]);
-
-  // Check if all players answered early
-  useEffect(() => {
-    if (!isHost || isRevealed) return;
-    if (submissions.length >= players.length && players.length > 0) {
-      handleHostReveal();
+    let roundPts = computeQuizScore(isCorrect, elapsed, 15000, streakCount, penaltyEnabled);
+    if (isJackpot) {
+      roundPts *= 2;
     }
-  }, [isHost, isRevealed, submissions.length, players.length, handleHostReveal]);
 
-  // Sound feedback on reveal
-  useEffect(() => {
-    if (!isRevealed) return;
-    if (selectedChoice === currentQ.answerIndex) {
-      setStreakCount((s) => s + 1);
+    setPointsGainedThisRound(roundPts);
+
+    if (isCorrect) {
       sound.playCorrect();
-    } else if (selectedChoice !== null) {
-      setStreakCount(0);
-      sound.playWrong();
-    }
-  }, [isRevealed]);
-
-  // Host advances everyone to the next question or podium
-  const handleNextQuestionOrFinish = async () => {
-    if (!isHost) return;
-
-    if (currentQuestionIdx >= questions.length - 1) {
-      await sendBroadcast('quiz_finished', { finalScores: cumulativeScores });
-      onFinishGame(cumulativeScores);
+      setStreakCount((prev) => prev + 1);
+      setReactionTimes((prev) => [...prev, elapsed]);
     } else {
-      await sendBroadcast('next_question', { questionIdx: currentQuestionIdx + 1 });
+      sound.playWrong();
+      setStreakCount(0);
     }
-  };
+
+    setCumulativeScores((prev) => ({
+      ...prev,
+      [userId]: Math.max(0, (prev[userId] || 0) + roundPts),
+    }));
+
+    // If final question finished, inform parent onFinishGame
+    if (roundNo >= totalRounds) {
+      const finalScores = { ...cumulativeScores, [userId]: Math.max(0, (cumulativeScores[userId] || 0) + roundPts) };
+      onFinishGame(finalScores);
+    }
+  }, [isReveal]);
 
   return (
-    <div className="flex-1 flex flex-col justify-between max-w-4xl mx-auto w-full py-4 space-y-6 select-none">
-      {/* Header */}
-      <div className="flex items-center justify-between pb-3 border-b border-line">
-        <div className="flex items-center gap-2">
-          <Lightbulb className="w-5 h-5 text-game-quiz" />
-          <span className="font-heading font-bold text-lg text-text">Quick Draw Quiz</span>
+    <div className="flex-1 flex flex-col justify-between max-w-4xl mx-auto w-full py-4 space-y-6 select-none animate-fade">
+      {/* Round Banner (Section 5.5) */}
+      <div className="w-full flex items-center justify-between p-3.5 rounded-card bg-surface border-2 border-line shadow-tile">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-[10px] bg-game-quiz text-ink flex items-center justify-center font-bold shadow-sm">
+            <Lightbulb className="w-5 h-5" />
+          </div>
+          <div>
+            <span className="font-heading font-black text-sm md:text-base text-text flex items-center gap-2">
+              Question {roundNo} of {totalRounds}
+              {isJackpot && (
+                <span className="px-2 py-0.5 rounded-[6px] bg-warn text-ink text-[11px] font-black uppercase tracking-wider animate-bounce">
+                  🎰 Jackpot x2!
+                </span>
+              )}
+            </span>
+            <span className="text-xs text-text-muted capitalize">
+              {currentQ.category} • Difficulty {currentQ.difficulty}
+            </span>
+          </div>
         </div>
-        <div className="flex items-center gap-4">
-          <span className="text-xs uppercase font-bold text-text-muted">
-            Question {currentQuestionIdx + 1}/{questions.length}
-          </span>
-          <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-surface-raised border border-line text-sm font-heading font-black">
-            <Clock className="w-4 h-4 text-warn" />
-            <span className={remainingSecs <= 5 ? 'text-danger animate-pulse' : 'text-text'}>
+
+        {/* Timer and Streak */}
+        <div className="flex items-center gap-3">
+          {streakCount > 1 && (
+            <div className="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-[8px] bg-warn/15 border border-warn/30 text-warn text-xs font-black">
+              <Flame className="w-3.5 h-3.5 fill-warn" />
+              <span>{streakCount} Streak!</span>
+            </div>
+          )}
+
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-[10px] bg-surface-raised border border-line text-xs font-heading font-black shadow-tile-sm">
+            <Clock className="w-3.5 h-3.5 text-warn" />
+            <span className={`tabular-nums ${remainingSecs <= 5 ? 'text-danger animate-pulse font-black' : 'text-text'}`}>
               {remainingSecs}s
             </span>
           </div>
         </div>
       </div>
 
-      {/* Main Question Card */}
-      <div className="bg-surface p-6 md:p-8 rounded-card border-2 border-line space-y-6 shadow-xl">
-        <div className="flex items-center justify-between">
-          <span className="text-xs uppercase font-bold px-2.5 py-0.5 rounded-full bg-primary/20 text-primary border border-primary/30">
-            {currentQ.category} • Diff: {currentQ.difficulty}
-          </span>
-          {streakCount > 1 && (
-            <span className="text-xs font-bold text-warn animate-bounce">
-              🔥 {streakCount} Streak!
-            </span>
-          )}
-        </div>
+      {/* Main Question Card (Hard-Shadow Tile) */}
+      <div className="tile p-6 md:p-8 space-y-6">
+        {/* Intro Phase Banner */}
+        {isIntro ? (
+          <div className="py-12 flex flex-col items-center justify-center text-center space-y-3">
+            <span className="text-xs font-extrabold uppercase tracking-widest text-primary">Get Ready</span>
+            <h2 className="text-3xl md:text-5xl font-black font-heading text-text">
+              Question {roundNo}
+            </h2>
+            {isJackpot && (
+              <span className="text-sm font-black text-warn uppercase tracking-wider">
+                Double points on the line!
+              </span>
+            )}
+          </div>
+        ) : (
+          <>
+            {/* Question Text */}
+            <h2 className="text-2xl md:text-3xl font-extrabold font-heading text-text leading-snug">
+              {currentQ.question}
+            </h2>
 
-        <h2 className="text-2xl md:text-3xl font-black font-heading text-text leading-snug">
-          {currentQ.question}
-        </h2>
+            {/* 4 Multiple Choice Options (QZ-1 & QZ-3) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+              {currentQ.options.map((option, idx) => {
+                const isSelected = selectedChoice === idx;
+                const isCorrect = isReveal && idx === currentQ.answerIndex;
+                const isWrong = isReveal && isSelected && !isCorrect;
 
-        {/* 4 Multiple Choice Options */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {currentQ.options.map((opt, idx) => {
-            const isSelected = selectedChoice === idx;
-            const isCorrect = isRevealed && idx === currentQ.answerIndex;
-            const isWrongSelection = isRevealed && isSelected && idx !== currentQ.answerIndex;
+                let cardStyle =
+                  'border-2 border-line bg-surface-raised hover:border-text-muted/60 text-text shadow-tile-sm';
 
-            let btnStyle = 'border-line bg-surface-raised hover:border-text-muted/40 text-text';
-            if (isSelected && !isRevealed) {
-              btnStyle = 'border-primary bg-primary/20 text-text shadow-md';
-            } else if (isCorrect) {
-              btnStyle = 'border-success bg-success/20 text-success font-bold shadow-lg';
-            } else if (isWrongSelection) {
-              btnStyle = 'border-danger bg-danger/20 text-danger font-bold';
-            }
+                if (isSelected && !isReveal) {
+                  cardStyle = 'border-primary bg-primary/20 text-text shadow-tile font-bold';
+                }
 
-            return (
-              <button
-                key={idx}
-                type="button"
-                disabled={lockedIn || isRevealed}
-                onClick={() => handleSelectChoice(idx)}
-                className={`p-5 rounded-card text-left transition-all border-2 flex items-center justify-between text-base font-semibold ${btnStyle}`}
-              >
-                <span>{opt}</span>
-                {isCorrect && <CheckCircle2 className="w-5 h-5 text-success flex-shrink-0" />}
-                {isWrongSelection && <XCircle className="w-5 h-5 text-danger flex-shrink-0" />}
-              </button>
-            );
-          })}
-        </div>
+                if (isReveal) {
+                  if (isCorrect) {
+                    cardStyle = 'border-success bg-success/20 text-success font-black shadow-tile';
+                  } else if (isWrong) {
+                    cardStyle = 'border-danger bg-danger/20 text-danger font-bold line-through';
+                  } else {
+                    cardStyle = 'border-line/40 bg-surface/40 text-text-muted opacity-60';
+                  }
+                }
 
-        {/* Submissions Strip */}
-        <div className="flex items-center gap-2 pt-2 border-t border-line">
-          <span className="text-xs text-text-muted font-semibold">Answered:</span>
-          <div className="flex items-center gap-1.5">
-            {players.map((p) => {
-              const hasAnswered = submissions.some((s) => s.userId === p.user_id);
-              return (
-                <div key={p.user_id} className={`transition-opacity ${hasAnswered ? 'opacity-100' : 'opacity-30'}`}>
-                  <Avatar avatarId={p.profile?.avatar_id} name={p.profile?.display_name} size="sm" />
+                return (
+                  <button
+                    key={idx}
+                    type="button"
+                    disabled={lockedIn || isReveal}
+                    onClick={() => handleSelectChoice(idx)}
+                    className={`p-4 rounded-[12px] text-left transition-transform duration-75 flex items-center justify-between min-h-[58px] ${cardStyle} ${
+                      !lockedIn && !isReveal ? 'active:translate-x-1 active:translate-y-1' : ''
+                    }`}
+                  >
+                    <span className="font-heading font-bold text-sm md:text-base pr-2 leading-tight">
+                      {option}
+                    </span>
+
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      {isSelected && !isReveal && (
+                        <span className="text-xs px-2 py-0.5 rounded bg-primary text-ink font-black">
+                          Locked in
+                        </span>
+                      )}
+                      {isCorrect && <CheckCircle2 className="w-5 h-5 text-success" />}
+                      {isWrong && <XCircle className="w-5 h-5 text-danger" />}
+                      {isReveal && optionCounts[idx] > 0 && (
+                        <span className="text-[11px] font-bold text-text-muted px-1.5 py-0.5 rounded bg-surface border border-line">
+                          {optionCounts[idx]}
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* QZ-6 Reveal Details */}
+            {isReveal && (
+              <div className="p-4 rounded-[12px] bg-surface-raised border border-line space-y-2 animate-fade">
+                <div className="flex items-center justify-between text-xs font-bold">
+                  <span className="text-text">
+                    {pointsGainedThisRound > 0 ? (
+                      <span className="text-success font-black font-heading text-sm">
+                        +{pointsGainedThisRound} Points! {isJackpot && '🎰 JACKPOT!'}
+                      </span>
+                    ) : (
+                      <span className="text-text-muted">No points awarded</span>
+                    )}
+                  </span>
+                  {streakCount > 0 && (
+                    <span className="text-warn flex items-center gap-1">
+                      <Flame className="w-4 h-4 fill-warn" /> {streakCount} Streak!
+                    </span>
+                  )}
                 </div>
-              );
-            })}
-          </div>
-        </div>
 
-        {/* Reveal Explanation */}
-        {isRevealed && (
-          <div className="p-4 rounded-xl bg-surface-raised border border-line space-y-1">
-            <span className="text-xs uppercase font-bold text-success">Explanation</span>
-            <p className="text-sm text-text-muted">{currentQ.explanation}</p>
-          </div>
+                {currentQ.explanation && (
+                  <p className="text-xs text-text-muted border-t border-line/50 pt-2 leading-relaxed">
+                    💡 <strong className="text-text">Explanation:</strong> {currentQ.explanation}
+                  </p>
+                )}
+              </div>
+            )}
+          </>
         )}
       </div>
 
-      {/* Footer / Host Progression */}
-      <div className="flex items-center justify-between">
-        <div className="text-xs text-text-muted">
-          {lockedIn && !isRevealed ? (
-            <span className="text-warn font-semibold">✓ Answer locked in! Waiting for other players…</span>
-          ) : isRevealed ? (
-            <span>Question revealed!</span>
-          ) : (
-            <span>Lock in quickly for maximum time bonus!</span>
-          )}
+      {/* Player Score Bar Strip */}
+      <div className="w-full flex items-center justify-between p-3 rounded-[12px] bg-surface border border-line shadow-sm overflow-x-auto">
+        <div className="flex items-center gap-3">
+          {players.map((p) => {
+            const score = cumulativeScores[p.user_id] || 0;
+            const isMe = p.user_id === userId;
+            return (
+              <div key={p.user_id} className="flex items-center gap-2 px-2.5 py-1 rounded-[8px] bg-surface-raised border border-line/50">
+                <Avatar avatarId={p.profile?.avatar_id || 'avatar-01'} name={p.profile?.display_name} size="sm" />
+                <span className="text-xs font-heading font-bold text-text truncate max-w-[90px]">
+                  {p.profile?.display_name || 'Player'} {isMe && '(You)'}
+                </span>
+                <span className="text-xs font-black text-primary tabular-nums">
+                  {score}
+                </span>
+              </div>
+            );
+          })}
         </div>
-
-        {isHost && isRevealed ? (
-          <Button variant="primary" onClick={handleNextQuestionOrFinish}>
-            {currentQuestionIdx >= questions.length - 1 ? 'View Final Podium' : 'Next Question →'}
-          </Button>
-        ) : isRevealed ? (
-          <span className="text-xs text-text-muted">Waiting for host…</span>
-        ) : null}
       </div>
     </div>
   );
