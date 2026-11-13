@@ -86,3 +86,4 @@ describe('Emoji Charades Mechanics & Scoring (SRS v2 Section 3.5 & 7.3)', () => 
     expect(ROUND_DURATION_SECS).toBe(60);
   });
 });
+

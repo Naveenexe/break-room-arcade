@@ -42,3 +42,4 @@
 - **Worked Example Assertion:** Exactly 200 points on standard round, 400 points on Jackpot round verified.
 - **Arcade Points Conversion:** Top-ranked player successfully awarded 10 Arcade Points; tied scores share points.
 - **Status:** **PASSED & DONE**.
+

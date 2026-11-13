@@ -56,3 +56,4 @@ describe('SRS v2 Section 3.2 Typing Race Verification', () => {
     expect(diff3.length).toBeGreaterThanOrEqual(1);
   });
 });
+

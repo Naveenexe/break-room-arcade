@@ -61,3 +61,4 @@
 - **Word Pool:** 200 starter words.
 - **Dictionary:** 64,081 words in `public/dictionary.txt`.
 - **Status:** **PASSED & DONE**.
+

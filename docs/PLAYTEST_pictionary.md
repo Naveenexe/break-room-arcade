@@ -54,3 +54,4 @@
 - **Aspect Ratio:** Fixed 3:2 aspect ratio canvas with normalized $[0, 1]$ floating-point coordinates.
 - **Palette & Brushes:** 8 v2 colors, 3 sizes (3, 7, 14), Undo, Eraser, Clear.
 - **Status:** **PASSED & DONE**.
+

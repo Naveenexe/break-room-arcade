@@ -123,7 +123,9 @@ export const LobbyPage: React.FC = () => {
       }
 
       setRoom(roomData);
-      setSelectedGame(roomData.current_game || 'quiz');
+      if (roomData.current_game) {
+        setSelectedGame(roomData.current_game);
+      }
       setAllowVoting(Boolean(roomData.settings?.allow_voting));
 
       // Fetch room players with profiles
@@ -144,6 +146,23 @@ export const LobbyPage: React.FC = () => {
     }
   }, [code]);
 
+  // Fetch only players list without resetting room state or selected game
+  const fetchPlayersOnly = useCallback(async (roomId: string) => {
+    try {
+      const { data: playersData } = await supabase
+        .from('room_players')
+        .select('*, profile:profiles(*)')
+        .eq('room_id', roomId)
+        .order('joined_at', { ascending: true });
+
+      if (playersData) {
+        setPlayers(playersData as unknown as PlayerWithProfile[]);
+      }
+    } catch {
+      // Ignore transient errors
+    }
+  }, []);
+
   useEffect(() => {
     fetchRoomData();
 
@@ -162,6 +181,7 @@ export const LobbyPage: React.FC = () => {
         // Broadcast received: Update selected game on all devices
         if (payload?.game) {
           setSelectedGame(payload.game);
+          setStartError(null);
         }
       })
       .on(
@@ -172,6 +192,9 @@ export const LobbyPage: React.FC = () => {
             const updated = payload.new as Room;
             if (updated.code === code.toUpperCase()) {
               setRoom(updated);
+              if (updated.current_game) {
+                setSelectedGame(updated.current_game);
+              }
               if (updated.status === 'in_game') {
                 navigate(`/room/${code}/play`);
               }
@@ -183,7 +206,10 @@ export const LobbyPage: React.FC = () => {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'room_players' },
         () => {
-          fetchRoomData();
+          // Only refresh player list, do not wipe out selected game
+          if (room?.id) {
+            fetchPlayersOnly(room.id);
+          }
         }
       )
       .subscribe();
@@ -203,7 +229,7 @@ export const LobbyPage: React.FC = () => {
       supabase.removeChannel(channel);
       clearInterval(heartbeatInterval);
     };
-  }, [code, fetchRoomData, room?.id, user?.id, navigate]);
+  }, [code, fetchRoomData, fetchPlayersOnly, room?.id, user?.id, navigate]);
 
   const handleCopyInvite = () => {
     if (!room) return;
@@ -224,6 +250,21 @@ export const LobbyPage: React.FC = () => {
   const handleSelectGame = async (gameId: string) => {
     if (!isHost && !allowVoting) return;
     setSelectedGame(gameId);
+    setStartError(null);
+
+    // Persist to database so subsequent fetchRoomData and other players get it
+    if (room?.id) {
+      void (async () => {
+        try {
+          await supabase
+            .from('rooms')
+            .update({ current_game: gameId })
+            .eq('id', room.id);
+        } catch {
+          // ignore
+        }
+      })();
+    }
 
     const channel = supabase.channel(`room_lobby:${code}`);
     await channel.send({

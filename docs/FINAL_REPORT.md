@@ -183,3 +183,4 @@ The following actions have been automated where possible. For steps strictly req
 1. Log into your Netlify dashboard: `https://app.netlify.com/sites/break-room-arcade`.
 2. Netlify will auto-deploy the pushed `main` branch.
 3. Once deployed, open `https://break-room-arcade.netlify.app` and test in two browser windows.
+

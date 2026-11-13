@@ -118,3 +118,4 @@ export const ART_MANIFEST: Record<string, ArtAsset> = {
     alt: 'Break Room Arcade wordmark in Bricolage Grotesque',
   },
 };
+

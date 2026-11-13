@@ -76,3 +76,4 @@ describe('SRS v2 Section 3.3 Quick Draw Quiz Verification', () => {
     expect(Object.keys(sanitizedQuestionForPublicState)).not.toContain('answerIndex');
   });
 });
+

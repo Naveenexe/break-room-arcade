@@ -102,3 +102,4 @@ describe('Word Chain Blitz Mechanics & Scoring (SRS v2 Section 3.6 & 7.6)', () =
     expect(winnerWithLongest).toBe(160);
   });
 });
+

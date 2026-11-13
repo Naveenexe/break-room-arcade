@@ -41,3 +41,4 @@
 - **Net WPM Assertion:** Verified $(150 / 5) / (45 / 60) = 40\text{ WPM}$.
 - **Accuracy Penalty Assertion:** Verified $<90\%$ accuracy yields $0.75\times$ penalty.
 - **Status:** **PASSED & DONE**.
+
