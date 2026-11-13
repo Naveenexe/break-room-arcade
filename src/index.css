@@ -3,36 +3,42 @@
 @tailwind utilities;
 
 :root {
-  /* Dark ("Arcade Night") - Default */
-  --bg: #1E1B3A;
-  --surface: #2A2650;
-  --surface-raised: #383270;
-  --line: #4C4690;
-  --text: #F7F4FF;
-  --text-muted: #B9B3DE;
-  --primary: #FF5FA2;
-  --success: #3DDBB0;
-  --danger: #FF5C6C;
-  --warn: #FFD23F;
+  /* SRS v2 Section 5.2: Dark theme ("Rooftop night", default) */
+  --bg: #0A2E36;
+  --surface: #11414B;
+  --surface-raised: #18535F;
+  --line: #2F7684;
+  --ink: #06222A;
+  --text: #F2FBF8;
+  --text-muted: #9CC9C6;
+  --primary: #FFB627;
+  --primary-press: #E89E00;
+  --success: #4ADE80;
+  --danger: #FF3B5C;
+  --warn: #FFD166;
+  --shadow: #04181D;
 }
 
 html.light {
-  /* Light ("Daylight") */
-  --bg: #F4F2FF;
+  /* SRS v2 Section 5.2: Light theme ("Rooftop day") */
+  --bg: #F1FAF7;
   --surface: #FFFFFF;
-  --surface-raised: #FFFFFF;
-  --line: #D6D0F5;
-  --text: #231F4A;
-  --text-muted: #5F5A8F;
-  --primary: #E0357F;
-  --success: #0E9F7A;
-  --danger: #D63348;
-  --warn: #B87F00;
+  --surface-raised: #E6F5F0;
+  --line: #BFE0D8;
+  --ink: #06222A;
+  --text: #0B2A31;
+  --text-muted: #4C7078;
+  --primary: #F2A100;
+  --primary-press: #D98E00;
+  --success: #14A44D;
+  --danger: #D81E45;
+  --warn: #B37A00;
+  --shadow: #0B2A31;
 }
 
-/* Base adjustments */
+/* Base typography */
 body {
-  font-family: 'Figtree', system-ui, -apple-system, sans-serif;
+  font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
   background-color: var(--bg);
   color: var(--text);
   margin: 0;
@@ -43,36 +49,62 @@ body {
 }
 
 h1, h2, h3, h4, h5, h6 {
-  font-family: 'Fredoka', system-ui, sans-serif;
+  font-family: 'Bricolage Grotesque', system-ui, sans-serif;
+  letter-spacing: -0.01em;
 }
 
-/* Spotlights */
-.hero-spotlight {
-  background: radial-gradient(circle at 50% 20%, rgba(255, 95, 162, 0.15) 0%, transparent 60%);
+/* Tabular figures for timers, scores, rankings (Section 5.3) */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+  font-family: 'Atkinson Hyperlegible', monospace, sans-serif;
 }
 
-.podium-spotlight {
-  background: radial-gradient(circle at 50% 50%, rgba(255, 210, 63, 0.2) 0%, transparent 70%);
+/* Hard-shadow tile utility (Section 5.4) */
+.tile {
+  background-color: var(--surface);
+  border: 2px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 4px 4px 0 var(--shadow);
 }
 
-/* Button Chunky Press Styling */
-.btn-chunky {
+.tile-raised {
+  background-color: var(--surface-raised);
+  border: 2px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 4px 4px 0 var(--shadow);
+}
+
+.tile-modal {
+  background-color: var(--surface);
+  border: 2px solid var(--line);
+  border-radius: 20px;
+  box-shadow: 6px 6px 0 var(--shadow);
+}
+
+/* Hard-shadow button behavior (Section 5.4) */
+.btn-hard {
   position: relative;
-  transition: all 0.1s ease-in-out;
-  box-shadow: 0 4px 0 var(--line);
+  border: 2px solid var(--ink);
+  border-radius: 12px;
+  box-shadow: 3px 3px 0 var(--shadow);
+  transition: transform 0.08s ease, box-shadow 0.08s ease;
 }
 
-.btn-chunky:active:not(:disabled) {
-  transform: translateY(3px);
-  box-shadow: 0 1px 0 var(--line);
+.btn-hard:hover:not(:disabled) {
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0 var(--shadow);
 }
 
-.btn-chunky-primary {
-  box-shadow: 0 4px 0 rgba(0, 0, 0, 0.35);
+.btn-hard:active:not(:disabled) {
+  transform: translate(3px, 3px);
+  box-shadow: 0 0 0 var(--shadow);
 }
 
-.btn-chunky-primary:active:not(:disabled) {
-  transform: translateY(3px);
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+/* Gradients in ONE place only: soft radial sunset glow behind lobby and podium (Section 5.2) */
+.sunset-glow {
+  background: radial-gradient(circle at 50% 30%, rgba(255, 182, 39, 0.22) 0%, rgba(255, 122, 89, 0.12) 45%, transparent 70%);
 }
 
+.podium-glow {
+  background: radial-gradient(circle at 50% 60%, rgba(255, 182, 39, 0.25) 0%, rgba(255, 122, 89, 0.15) 50%, transparent 75%);
+}

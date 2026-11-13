@@ -12,40 +12,49 @@ export default {
         surface: 'var(--surface)',
         'surface-raised': 'var(--surface-raised)',
         line: 'var(--line)',
+        ink: 'var(--ink)',
         text: 'var(--text)',
         'text-muted': 'var(--text-muted)',
         primary: 'var(--primary)',
+        'primary-press': 'var(--primary-press)',
         success: 'var(--success)',
         danger: 'var(--danger)',
         warn: 'var(--warn)',
-        // Signature game colors
+        shadow: 'var(--shadow)',
+        // SRS v2 Section 5.2 Signature Game Accent Colors
         game: {
-          pictionary: '#FF8A3D',
-          charades: '#FFD23F',
-          wordchain: '#3DDBB0',
-          reaction: '#FF5C6C',
-          typing: '#4DB5FF',
-          quiz: '#A47BFF',
-          go: '#2EE37D',
+          pictionary: '#FF7A59', // Tangerine
+          charades: '#FFC94D',  // Marigold-light
+          wordchain: '#B6E35B', // Lime
+          reaction: '#FF8FB8',  // Hot pink
+          typing: '#5CC8FF',    // Sky
+          quiz: '#B9A4FF',      // Lilac
+          // Reaction Duel signals
+          wait: '#FFB627',
+          go: '#2BD96B',
+          decoyBlue: '#4F7CFF',
+          decoyPink: '#FF8FB8',
+          decoyPurple: '#8F6BFF',
         }
       },
       fontFamily: {
-        heading: ['Fredoka', 'system-ui', 'sans-serif'],
-        sans: ['Figtree', 'system-ui', 'sans-serif'],
+        heading: ['"Bricolage Grotesque"', 'system-ui', 'sans-serif'],
+        sans: ['"DM Sans"', 'system-ui', 'sans-serif'],
         typing: ['"Atkinson Hyperlegible"', 'monospace', 'sans-serif'],
       },
       borderRadius: {
-        'card': '20px',
-        'modal': '28px',
-        'input': '14px',
+        card: '16px',
+        button: '12px',
+        input: '12px',
+        modal: '20px',
       },
       boxShadow: {
-        'press': '0 4px 0 var(--line)',
-        'press-active': '0 1px 0 var(--line)',
-        'press-primary': '0 4px 0 rgba(0,0,0,0.3)',
+        tile: '4px 4px 0 var(--shadow)',
+        'tile-sm': '3px 3px 0 var(--shadow)',
+        'tile-lg': '6px 6px 0 var(--shadow)',
+        'tile-primary': '3px 3px 0 var(--shadow)',
       }
     },
   },
   plugins: [],
 }
-

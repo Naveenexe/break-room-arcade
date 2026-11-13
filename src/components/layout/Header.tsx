@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Volume2, VolumeX, Moon, Sun, Wifi, WifiOff, LogOut, User } from 'lucide-react';
+import { Volume2, VolumeX, Moon, Sun, Wifi, WifiOff, LogOut } from 'lucide-react';
 import { useAuthStore } from '@/stores/auth-store';
 import { useSettingsStore } from '@/stores/settings-store';
 import { timeSync, SyncStatus } from '@/lib/time-sync';
@@ -30,29 +30,31 @@ export const Header: React.FC<HeaderProps> = ({ roomCode }) => {
   };
 
   return (
-    <header className="sticky top-0 z-40 w-full bg-surface/80 backdrop-blur-md border-b-2 border-line px-4 py-3">
+    <header className="sticky top-0 z-40 w-full bg-surface border-b-2 border-line px-4 py-2.5 shadow-sm">
       <div className="max-w-6xl mx-auto flex items-center justify-between gap-3">
-        {/* Logo */}
-        <Link to="/" className="flex items-center gap-2 group">
-          <div className="w-10 h-10 rounded-2xl bg-primary flex items-center justify-center font-heading font-black text-bg text-xl shadow-press group-hover:scale-105 transition-transform">
-            🕹️
-          </div>
+        {/* Logo Mark & Wordmark */}
+        <Link to="/" className="flex items-center gap-2.5 group">
+          <img
+            src="/art/logo-mark.svg"
+            alt="Break Room Arcade"
+            className="w-9 h-9 transition-transform group-hover:scale-105"
+          />
           <div className="flex flex-col">
-            <span className="font-heading font-bold text-lg md:text-xl text-text leading-tight tracking-tight">
+            <span className="font-heading font-extrabold text-lg md:text-xl text-text leading-tight tracking-tight">
               Break Room <span className="text-primary">Arcade</span>
             </span>
           </div>
         </Link>
 
-        {/* Center: Room Code Badge if in room */}
+        {/* Center: Room Code Tile if in room */}
         {roomCode && (
           <button
             onClick={handleCopyCode}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-surface-raised border-2 border-line hover:border-primary transition-all text-xs md:text-sm font-heading font-bold"
+            className="flex items-center gap-2 px-3.5 py-1.5 rounded-[12px] bg-surface-raised border-2 border-line hover:border-primary transition-all text-xs md:text-sm font-heading font-bold shadow-tile-sm"
             title="Click to copy room code"
           >
             <span className="text-text-muted">ROOM</span>
-            <span className="text-warn tracking-widest text-sm md:text-base">{roomCode}</span>
+            <span className="text-warn tracking-widest text-sm md:text-base font-black">{roomCode}</span>
             <span className="text-xs text-text-muted">
               {copiedCode ? '✓ Copied' : '📋'}
             </span>
@@ -63,12 +65,12 @@ export const Header: React.FC<HeaderProps> = ({ roomCode }) => {
         <div className="flex items-center gap-2">
           {/* Sync Status Badge */}
           <div
-            className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${
+            className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-[10px] text-xs font-semibold border ${
               syncStatus.status === 'synced'
-                ? 'bg-success/10 border-success/30 text-success'
+                ? 'bg-success/15 border-success/30 text-success'
                 : syncStatus.status === 'slow'
-                ? 'bg-warn/10 border-warn/30 text-warn'
-                : 'bg-danger/10 border-danger/30 text-danger'
+                ? 'bg-warn/15 border-warn/30 text-warn'
+                : 'bg-danger/15 border-danger/30 text-danger'
             }`}
             title={`Offset: ${syncStatus.offset}ms, RTT: ${syncStatus.rtt}ms`}
           >
@@ -93,63 +95,61 @@ export const Header: React.FC<HeaderProps> = ({ roomCode }) => {
           {/* Sound Mute Toggle */}
           <button
             onClick={toggleMute}
-            className="w-10 h-10 rounded-full flex items-center justify-center bg-surface border-2 border-line text-text hover:bg-surface-raised transition-colors"
+            className="w-9 h-9 rounded-[10px] flex items-center justify-center bg-surface-raised border-2 border-line text-text hover:border-primary transition-colors btn-hard"
             title={isMuted ? 'Unmute Sound' : 'Mute Sound'}
             aria-label={isMuted ? 'Unmute Sound' : 'Mute Sound'}
           >
-            {isMuted ? <VolumeX className="w-5 h-5 text-danger" /> : <Volume2 className="w-5 h-5 text-success" />}
+            {isMuted ? <VolumeX className="w-4 h-4 text-danger" /> : <Volume2 className="w-4 h-4 text-success" />}
           </button>
 
           {/* Theme Toggle */}
           <button
             onClick={toggleTheme}
-            className="w-10 h-10 rounded-full flex items-center justify-center bg-surface border-2 border-line text-text hover:bg-surface-raised transition-colors"
-            title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-            aria-label="Toggle Theme"
+            className="w-9 h-9 rounded-[10px] flex items-center justify-center bg-surface-raised border-2 border-line text-text hover:border-primary transition-colors btn-hard"
+            title={theme === 'dark' ? 'Switch to Rooftop Day' : 'Switch to Rooftop Night'}
+            aria-label={theme === 'dark' ? 'Switch to Rooftop Day' : 'Switch to Rooftop Night'}
           >
-            {theme === 'dark' ? <Sun className="w-5 h-5 text-warn" /> : <Moon className="w-5 h-5 text-primary" />}
+            {theme === 'dark' ? <Sun className="w-4 h-4 text-warn" /> : <Moon className="w-4 h-4 text-primary" />}
           </button>
 
-          {/* User Profile / Auth State */}
+          {/* Profile / Logout */}
           {user ? (
-            <div className="flex items-center gap-2 pl-1 border-l border-line">
+            <div className="flex items-center gap-1.5 pl-1 border-l-2 border-line">
               <Link
                 to="/profile"
-                className="flex items-center gap-2 hover:opacity-85 transition-opacity"
+                className="flex items-center gap-2 p-1 rounded-[10px] hover:bg-surface-raised transition-colors"
                 title="Edit Profile"
               >
                 <Avatar
                   avatarId={profile?.avatar_id || 'avatar-01'}
-                  name={profile?.display_name || 'Player'}
+                  name={profile?.display_name || user.email || 'Player'}
                   size="sm"
                 />
-                <span className="hidden md:inline text-sm font-semibold text-text max-w-[120px] truncate">
-                  {profile?.display_name || 'Player'}
+                <span className="hidden md:inline-block font-heading font-bold text-xs text-text max-w-[100px] truncate">
+                  {profile?.display_name || user.email?.split('@')[0]}
                 </span>
               </Link>
               <button
-                onClick={() => {
-                  signOut();
-                  navigate('/login');
-                }}
-                className="w-9 h-9 rounded-full flex items-center justify-center text-text-muted hover:text-danger hover:bg-surface-raised transition-colors"
-                title="Log Out"
+                onClick={() => signOut().then(() => navigate('/'))}
+                className="p-1.5 text-text-muted hover:text-danger rounded-[10px] transition-colors"
+                title="Sign Out"
+                aria-label="Sign Out"
               >
                 <LogOut className="w-4 h-4" />
               </button>
             </div>
           ) : (
-            <Link
-              to="/login"
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-primary text-bg font-heading font-bold text-sm hover:brightness-105 transition-all shadow-press"
-            >
-              <User className="w-4 h-4" />
-              <span>Login</span>
-            </Link>
+            <div className="flex items-center gap-1 pl-1 border-l-2 border-line">
+              <Link
+                to="/login"
+                className="text-xs font-heading font-bold px-3 py-1.5 rounded-[10px] bg-primary text-ink border-2 border-ink btn-hard"
+              >
+                Sign In
+              </Link>
+            </div>
           )}
         </div>
       </div>
     </header>
   );
 };
-

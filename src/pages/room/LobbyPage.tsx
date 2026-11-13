@@ -293,12 +293,12 @@ export const LobbyPage: React.FC = () => {
   };
 
   const games = [
-    { id: 'quiz', name: 'Quick Draw Quiz', icon: '💡', desc: 'Speed multiple-choice buzzer' },
-    { id: 'reaction', name: 'Reaction Duel', icon: '⚡', desc: 'Milliseconds precision tap' },
-    { id: 'typing', name: 'Typing Race', icon: '🏁', desc: 'Race your friends across lanes' },
-    { id: 'pictionary', name: 'Pictionary', icon: '🎨', desc: 'Live shared drawing & guessing' },
-    { id: 'charades', name: 'Emoji Charades', icon: '🎭', desc: 'Act out prompts with emoji only' },
-    { id: 'wordchain', name: 'Word Chain Blitz', icon: '🔗', desc: 'Elimination word linker' },
+    { id: 'quiz', name: 'Quick Draw Quiz', icon: '💡', desc: 'Speed buzzer with streaks & jackpots', cover: '/art/cover-quiz.webp' },
+    { id: 'typing', name: 'Typing Race', icon: '🏁', desc: 'Race your friends across lanes', cover: '/art/cover-typing.webp' },
+    { id: 'reaction', name: 'Reaction Duel', icon: '⚡', desc: 'Milliseconds precision tap', cover: '/art/cover-reaction.webp' },
+    { id: 'pictionary', name: 'Pictionary', icon: '🎨', desc: 'Live shared drawing & guessing', cover: '/art/cover-pictionary.webp' },
+    { id: 'charades', name: 'Emoji Charades', icon: '🎭', desc: 'Act out prompts with emoji only', cover: '/art/cover-charades.webp' },
+    { id: 'wordchain', name: 'Word Chain Blitz', icon: '🔗', desc: 'Elimination word linker', cover: '/art/cover-wordchain.webp' },
   ];
 
   if (isLoading) {
@@ -494,25 +494,30 @@ export const LobbyPage: React.FC = () => {
                     type="button"
                     disabled={!isHost && !allowVoting}
                     onClick={() => handleSelectGame(g.id)}
-                    className={`p-3.5 rounded-card text-left transition-all border-2 flex flex-col justify-between min-h-[110px] ${
+                    className={`rounded-[14px] text-left transition-all border-2 flex flex-col justify-between overflow-hidden ${
                       isSelected
-                        ? 'border-primary bg-primary/10 shadow-md scale-[1.02]'
-                        : 'border-line bg-surface-raised hover:border-text-muted/40'
+                        ? 'border-primary bg-primary/10 shadow-tile scale-[1.02]'
+                        : 'border-line bg-surface-raised hover:border-text-muted/40 shadow-sm'
                     } ${!isHost && !allowVoting && 'cursor-default'}`}
                   >
-                    <div className="flex items-center justify-between">
-                      <span className="text-2xl">{g.icon}</span>
+                    <div className="relative h-20 w-full overflow-hidden bg-surface border-b border-line/60">
+                      <img
+                        src={g.cover}
+                        alt={g.name}
+                        className="w-full h-full object-cover"
+                        loading="lazy"
+                      />
                       {isSelected && (
-                        <span className="w-5 h-5 bg-primary text-bg rounded-full flex items-center justify-center text-xs font-bold">
+                        <span className="absolute top-2 right-2 w-5 h-5 bg-primary text-ink border border-ink rounded-full flex items-center justify-center text-xs font-black shadow-sm">
                           ✓
                         </span>
                       )}
                     </div>
-                    <div>
-                      <h3 className="font-heading font-bold text-sm text-text leading-tight mt-2">
+                    <div className="p-2.5">
+                      <h3 className="font-heading font-bold text-xs sm:text-sm text-text leading-tight">
                         {g.name}
                       </h3>
-                      <p className="text-[11px] text-text-muted mt-0.5 line-clamp-2">
+                      <p className="text-[10px] sm:text-[11px] text-text-muted mt-0.5 line-clamp-1">
                         {g.desc}
                       </p>
                     </div>

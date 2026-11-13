@@ -26,20 +26,27 @@ export const Button: React.FC<ButtonProps> = ({
     onClick?.(e);
   };
 
-  const baseStyles = 'inline-flex items-center justify-center font-heading font-semibold rounded-full transition-all select-none disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none';
+  // SRS v2 Section 5.4: Radius 12px, border 2px, hard-shadow 3px 3px 0, no pill buttons
+  const baseStyles =
+    'inline-flex items-center justify-center font-heading font-bold rounded-[12px] border-2 select-none transition-transform duration-75 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none';
 
   const sizeStyles = {
-    sm: 'text-sm px-4 py-2 min-h-[38px] min-w-[38px]',
-    md: 'text-base px-6 py-3 min-h-[48px]',
-    lg: 'text-lg px-8 py-4 min-h-[56px]',
+    sm: 'text-xs px-3.5 py-1.5 min-h-[40px]',
+    md: 'text-sm px-5 py-2.5 min-h-[48px]',
+    lg: 'text-base px-7 py-3.5 min-h-[54px]',
   }[size];
 
   const variantStyles = {
-    primary: 'bg-primary text-bg font-bold btn-chunky btn-chunky-primary hover:brightness-105 active:brightness-95',
-    secondary: 'bg-surface-raised text-text border-2 border-line btn-chunky hover:bg-opacity-80',
-    surface: 'bg-surface text-text border-2 border-line btn-chunky hover:bg-surface-raised',
-    danger: 'bg-danger text-bg font-bold btn-chunky btn-chunky-primary hover:brightness-105',
-    ghost: 'bg-transparent text-text hover:bg-surface active:bg-surface-raised',
+    primary:
+      'bg-primary text-ink border-ink hover:bg-primary-press btn-hard',
+    secondary:
+      'bg-surface-raised text-text border-line hover:border-text-muted/60 btn-hard',
+    surface:
+      'bg-surface text-text border-line hover:bg-surface-raised btn-hard',
+    danger:
+      'bg-danger text-text border-ink hover:brightness-110 btn-hard',
+    ghost:
+      'bg-transparent text-text border-transparent hover:bg-surface-raised active:bg-surface',
   }[variant];
 
   return (
@@ -69,4 +76,3 @@ export const Button: React.FC<ButtonProps> = ({
     </button>
   );
 };
-

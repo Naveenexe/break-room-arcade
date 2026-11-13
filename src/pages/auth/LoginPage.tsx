@@ -52,9 +52,9 @@ export const LoginPage: React.FC = () => {
 
   return (
     <div className="flex-1 flex items-center justify-center p-4">
-      <div className="w-full max-w-md bg-surface p-6 md:p-8 rounded-modal border-2 border-line shadow-2xl">
+      <div className="w-full max-w-md tile-modal p-6 md:p-8">
         <div className="text-center mb-6">
-          <div className="inline-flex w-14 h-14 rounded-2xl bg-primary items-center justify-center text-3xl mb-3 shadow-press">
+          <div className="inline-flex w-14 h-14 rounded-[16px] bg-primary items-center justify-center text-3xl mb-3 border-2 border-ink shadow-tile text-ink">
             🎮
           </div>
           <h1 className="text-2xl md:text-3xl font-bold font-heading text-text">Welcome Back</h1>
