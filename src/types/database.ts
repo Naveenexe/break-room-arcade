@@ -93,3 +93,23 @@ export interface ContentItem {
   created_by: string | null;
 }
 
+export interface RoundSubmission {
+  id: string;
+  room_id: string;
+  round_no: number;
+  user_id: string;
+  kind: 'quiz_answer' | 'reaction_tap' | 'typing_result' | 'guess' | 'guess_correct' | 'word';
+  payload: Record<string, unknown>;
+  arrived_at: string;
+}
+
+export interface RoundStroke {
+  id: string;
+  room_id: string;
+  round_no: number;
+  batch_seq: number;
+  strokes: Record<string, unknown>[];
+  created_at: string;
+}
+
+

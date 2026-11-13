@@ -30,11 +30,74 @@ export const LobbyPage: React.FC = () => {
   const [room, setRoom] = useState<Room | null>(null);
   const [players, setPlayers] = useState<PlayerWithProfile[]>([]);
   const [selectedGame, setSelectedGame] = useState<string>('quiz');
+  const [selectedPreset, setSelectedPreset] = useState<'quick' | 'standard' | 'long'>('standard');
   const [allowVoting, setAllowVoting] = useState<boolean>(false);
   const [copiedInvite, setCopiedInvite] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [startError, setStartError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  const getGameOptions = (game: string, preset: 'quick' | 'standard' | 'long') => {
+    switch (game) {
+      case 'quiz':
+        return {
+          rounds: preset === 'quick' ? 6 : preset === 'long' ? 15 : 10,
+          timeLimit: 15,
+          jackpot: true,
+          penalty: false,
+          preset,
+        };
+      case 'typing':
+        return {
+          rounds: preset === 'quick' ? 2 : preset === 'long' ? 5 : 3,
+          timeLimit: 75,
+          preset,
+        };
+      case 'reaction':
+        return {
+          rounds: preset === 'quick' ? 5 : preset === 'long' ? 10 : 7,
+          preset,
+        };
+      case 'pictionary':
+        return {
+          cycles: preset === 'long' ? 2 : 1,
+          drawTime: preset === 'quick' ? 50 : preset === 'long' ? 100 : 80,
+          wordChoices: true,
+          preset,
+        };
+      case 'charades':
+        return {
+          cycles: preset === 'long' ? 2 : 1,
+          roundTime: preset === 'quick' ? 40 : preset === 'long' ? 75 : 60,
+          skips: true,
+          preset,
+        };
+      case 'wordchain':
+        return {
+          rounds: preset === 'quick' ? 2 : preset === 'long' ? 5 : 3,
+          turnTime: preset === 'quick' ? 10 : preset === 'long' ? 15 : 12,
+          preset,
+        };
+      default:
+        return { preset };
+    }
+  };
+
+  const getEstimatedDuration = (game: string, preset: 'quick' | 'standard' | 'long') => {
+    const opts = getGameOptions(game, preset);
+    const n = Math.max(2, activePlayers.length);
+    let seconds = 0;
+    if (game === 'quiz') seconds = (opts.rounds as number) * 23;
+    else if (game === 'typing') seconds = (opts.rounds as number) * 86;
+    else if (game === 'reaction') seconds = (opts.rounds as number) * 13;
+    else if (game === 'pictionary') seconds = n * (opts.cycles as number) * ((opts.drawTime as number) + 19);
+    else if (game === 'charades') seconds = n * (opts.cycles as number) * ((opts.roundTime as number) + 8);
+    else if (game === 'wordchain') seconds = (opts.rounds as number) * 60;
+
+    const mins = Math.max(1, Math.round(seconds / 60));
+    return `About ${mins} minute${mins === 1 ? '' : 's'}`;
+  };
 
   const isHost = room?.host_id === user?.id;
   const isTestingMode = Boolean(room?.settings?.testing_mode);
@@ -125,14 +188,14 @@ export const LobbyPage: React.FC = () => {
       )
       .subscribe();
 
-    // Heartbeat every 10 seconds (TM-6)
+    // Heartbeat every 10 seconds (TM-6, E-14)
     const heartbeatInterval = window.setInterval(async () => {
-      if (room && user) {
-        await supabase
-          .from('room_players')
-          .update({ last_seen_at: new Date().toISOString() })
-          .eq('room_id', room.id)
-          .eq('user_id', user.id);
+      if (room?.id && user) {
+        try {
+          await supabase.rpc('heartbeat', { p_room_id: room.id });
+        } catch {
+          // Ignore transient network errors
+        }
       }
     }, 10_000);
 
@@ -195,26 +258,22 @@ export const LobbyPage: React.FC = () => {
 
   const handleStartGame = async () => {
     if (!room || !isHost || !canStart) return;
+    setStartError(null);
 
     try {
-      // 1. Authoritative server RPC call
+      const options = getGameOptions(selectedGame, selectedPreset);
+
+      // 1. Authoritative server RPC call (HC-2, E-28)
       const { error: rpcErr } = await supabase.rpc('start_game', {
         p_room_id: room.id,
         p_game: selectedGame,
+        p_options: options,
       });
 
       if (rpcErr) {
         console.error('start_game RPC error:', rpcErr);
-        // Fallback to direct table update if RPC not yet created
-        await supabase
-          .from('rooms')
-          .update({
-            status: 'in_game',
-            current_game: selectedGame,
-            phase: 'countdown',
-            last_active_at: new Date().toISOString(),
-          })
-          .eq('id', room.id);
+        setStartError(rpcErr.message || 'Failed to start game.');
+        return;
       }
 
       // 2. Broadcast to all connected players so their screens transition simultaneously
@@ -222,12 +281,14 @@ export const LobbyPage: React.FC = () => {
       await channel.send({
         type: 'broadcast',
         event: 'game_started',
-        payload: { game: selectedGame, room_id: room.id },
+        payload: { game: selectedGame, room_id: room.id, options },
       });
 
       navigate(`/room/${room.code}/play`);
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('Error starting game:', err);
+      const msg = err instanceof Error ? err.message : 'Error starting game';
+      setStartError(msg);
     }
   };
 
@@ -459,6 +520,42 @@ export const LobbyPage: React.FC = () => {
                 );
               })}
             </div>
+
+            {/* HC-1: Game Setup Presets & Estimated Duration */}
+            {isHost && (
+              <div className="mt-4 p-3.5 rounded-xl bg-surface-raised border border-line space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-text-muted">
+                    Match Length Preset
+                  </span>
+                  <span className="text-xs font-bold text-warn flex items-center gap-1">
+                    ⏱️ {getEstimatedDuration(selectedGame, selectedPreset)}
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  {(['quick', 'standard', 'long'] as const).map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setSelectedPreset(preset)}
+                      className={`py-1.5 px-3 rounded-lg text-xs font-heading font-bold capitalize transition-all border ${
+                        selectedPreset === preset
+                          ? 'bg-primary text-ink border-primary font-black shadow-sm'
+                          : 'bg-surface text-text-muted border-line hover:text-text'
+                      }`}
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {startError && (
+              <div className="mt-3 p-3 rounded-xl bg-danger/10 border border-danger/30 text-danger text-xs font-semibold">
+                ⚠️ {startError}
+              </div>
+            )}
           </div>
 
           {/* Action Bar */}

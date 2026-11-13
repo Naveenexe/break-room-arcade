@@ -168,3 +168,85 @@ export function evaluateGuess(guess: string, secretWord: string): 'correct' | 'c
   return 'wrong';
 }
 
+/**
+ * E-24 & E-26: Computes Arcade Points from final raw rankings.
+ * Ranks: 1st -> 10, 2nd -> 7, 3rd -> 5, 4th -> 4, 5th -> 3, 6th -> 2, 7+ -> 1
+ * Tied players share points of the best tied rank.
+ * Participants who stayed in at least one round get at least 1. Spectators get 0.
+ * Ties in raw points broken by earlier finalEventTimestamp.
+ */
+export interface PlayerStanding {
+  userId: string;
+  rawScore: number;
+  isSpectator: boolean;
+  hasParticipated?: boolean;
+  finalEventTimestamp?: number;
+}
+
+export interface ArcadeAward {
+  userId: string;
+  rank: number;
+  arcadePoints: number;
+}
+
+export function computeArcadePoints(standings: PlayerStanding[]): ArcadeAward[] {
+  // Filter active players vs spectators
+  const active = standings.filter((s) => !s.isSpectator);
+  const spectators = standings.filter((s) => s.isSpectator);
+
+  // Sort descending by rawScore, breaking ties by earlier finalEventTimestamp
+  active.sort((a, b) => {
+    if (b.rawScore !== a.rawScore) return b.rawScore - a.rawScore;
+    return (a.finalEventTimestamp || 0) - (b.finalEventTimestamp || 0);
+  });
+
+  const rankPointsMap = [10, 7, 5, 4, 3, 2, 1];
+  const awards: ArcadeAward[] = [];
+
+  let currentRank = 1;
+  for (let i = 0; i < active.length; i++) {
+    if (i > 0) {
+      if (active[i].rawScore !== active[i - 1].rawScore) {
+        currentRank = i + 1;
+      }
+    }
+
+    const pts = currentRank <= 6 ? rankPointsMap[currentRank - 1] : 1;
+    awards.push({
+      userId: active[i].userId,
+      rank: currentRank,
+      arcadePoints: Math.max(1, pts), // At least 1 for any participant
+    });
+  }
+
+  // Spectators receive 0 points
+  for (const s of spectators) {
+    awards.push({
+      userId: s.userId,
+      rank: 0,
+      arcadePoints: 0,
+    });
+  }
+
+  return awards;
+}
+
+/**
+ * E-6: Clamps measured client elapsed time to a window of the server's measurement:
+ * elapsed_used = clamp(client_elapsed, server_elapsed - 600 ms, server_elapsed)
+ */
+export function clampLatency(clientElapsedMs: number, serverElapsedMs: number): number {
+  const minAllowed = serverElapsedMs - 600;
+  return Math.max(minAllowed, Math.min(clientElapsedMs, serverElapsedMs));
+}
+
+/**
+ * E-7: Verifies whether a submission arrived within the allowable deadline window:
+ * arrival_time <= ends_at + min(rtt / 2, 400 ms)
+ */
+export function isSubmissionOnTime(arrivalTimestampMs: number, deadlineTimestampMs: number, rttMs: number): boolean {
+  const graceWindowMs = Math.min(Math.max(0, rttMs / 2), 400);
+  return arrivalTimestampMs <= deadlineTimestampMs + graceWindowMs;
+}
+
+
